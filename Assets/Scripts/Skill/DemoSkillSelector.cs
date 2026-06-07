@@ -34,6 +34,10 @@ public struct ObjectHeadSkillSettings
     public int zoneDurationTurns;
     public int zoneDamagePerTick;
     public float zoneTickSeconds;
+    public int zoneDurationRounds;
+    public int zoneDamagePerTurn;
+    public float zoneLengthWorld;
+    public float zoneThicknessWorld;
     public float slowMultiplier;
     public float projectileVisualDiameter;
     public bool blinkBeforeEffect;
@@ -70,6 +74,10 @@ public struct ObjectHeadSkillSettings
             zoneDurationTurns = 0,
             zoneDamagePerTick = 0,
             zoneTickSeconds = 1f,
+            zoneDurationRounds = 0,
+            zoneDamagePerTurn = 0,
+            zoneLengthWorld = 0f,
+            zoneThicknessWorld = 0.2f,
             slowMultiplier = 1f,
             projectileVisualDiameter = 0.58f,
             blinkBeforeEffect = false,
@@ -106,6 +114,12 @@ public class DemoSkillSelector : MonoBehaviour
     private void Update()
     {
         if (!allowKeyboardSelection || turnCharacter == null || !turnCharacter.HasControl)
+        {
+            return;
+        }
+
+        TurnManager manager = FindTurnManager();
+        if (manager == null || !manager.CanCharacterFire(turnCharacter))
         {
             return;
         }
@@ -198,24 +212,28 @@ public class DemoSkillSelector : MonoBehaviour
         if (selectedSkillIndex == 0)
         {
             settings.effectType = SkillEffectType.CreateHazardZone;
-            settings.maxDamage = 5;
-            settings.explosionRadiusWorld = 0.75f;
-            settings.knockbackForce = 2f;
-            settings.zoneDamagePerTick = 8;
-            settings.zoneDurationTurns = 3;
-            settings.zoneTickSeconds = 1f;
+            settings.maxDamage = 0;
+            settings.explosionRadiusWorld = 0.7f;
+            settings.knockbackForce = 0f;
+            settings.zoneDamagePerTurn = 8;
+            settings.zoneDurationRounds = 2;
+            settings.zoneLengthWorld = 4.5f;
+            settings.zoneThicknessWorld = 0.18f;
+            settings.slowMultiplier = 1f;
             return;
         }
 
         if (selectedSkillIndex == 1)
         {
             settings.effectType = SkillEffectType.CreateSlowZone;
-            settings.maxDamage = 10;
-            settings.explosionRadiusWorld = 1.05f;
-            settings.knockbackForce = 2f;
-            settings.zoneDamagePerTick = 10;
-            settings.zoneDurationTurns = 3;
-            settings.zoneTickSeconds = 1f;
+            settings.maxDamage = 15;
+            settings.explosionRadiusWorld = 1.4f;
+            settings.knockbackForce = 2.5f;
+            settings.terrainRadiusPx = 0;
+            settings.zoneDamagePerTurn = 10;
+            settings.zoneDurationRounds = 2;
+            settings.zoneLengthWorld = 6f;
+            settings.zoneThicknessWorld = 0.22f;
             settings.slowMultiplier = 0.6f;
             settings.impactColor = new Color(1f, 0.9f, 0.15f, 0.48f);
             return;
@@ -224,11 +242,11 @@ public class DemoSkillSelector : MonoBehaviour
         settings.effectType = SkillEffectType.ChainExplosion;
         settings.maxDamage = 8;
         settings.chainMaxTotalDamage = 35;
-        settings.explosionRadiusWorld = 0.78f;
+        settings.explosionRadiusWorld = 0.7f;
         settings.knockbackForce = 4f;
-        settings.terrainRadiusPx = 18;
-        settings.chainCount = 6;
-        settings.chainSpacingWorld = 0.5f;
+        settings.terrainRadiusPx = 17;
+        settings.chainCount = 5;
+        settings.chainSpacingWorld = 0.4f;
         settings.chainDelaySeconds = 0.1f;
         settings.blinkBeforeEffect = true;
         settings.blinkSeconds = 0.7f;
@@ -264,11 +282,13 @@ public class DemoSkillSelector : MonoBehaviour
         }
 
         settings.effectType = SkillEffectType.CreateHazardZone;
-        settings.maxDamage = 10;
-        settings.explosionRadiusWorld = 1f;
-        settings.zoneDamagePerTick = 12;
-        settings.zoneDurationTurns = 3;
-        settings.zoneTickSeconds = 1f;
+        settings.maxDamage = 0;
+        settings.explosionRadiusWorld = 0.8f;
+        settings.zoneDamagePerTurn = 12;
+        settings.zoneDurationRounds = 2;
+        settings.zoneLengthWorld = 5.5f;
+        settings.zoneThicknessWorld = 0.25f;
+        settings.slowMultiplier = 1f;
         settings.impactColor = new Color(0.24f, 0.78f, 0.24f, 0.48f);
     }
 
@@ -282,8 +302,8 @@ public class DemoSkillSelector : MonoBehaviour
         {
             settings.effectType = SkillEffectType.DamageExplosion;
             settings.maxDamage = 15;
-            settings.explosionRadiusWorld = 1.2f;
-            settings.terrainRadiusPx = 30;
+            settings.explosionRadiusWorld = 1.1f;
+            settings.terrainRadiusPx = 26;
             settings.knockbackForce = 12f;
             return;
         }
@@ -292,22 +312,22 @@ public class DemoSkillSelector : MonoBehaviour
         {
             settings.effectType = SkillEffectType.DelayedExplosion;
             settings.maxDamage = 30;
-            settings.explosionRadiusWorld = 1.8f;
-            settings.terrainRadiusPx = 52;
-            settings.knockbackForce = 8f;
+            settings.explosionRadiusWorld = 1.4f;
+            settings.terrainRadiusPx = 40;
+            settings.knockbackForce = 7f;
             settings.delaySeconds = 2f;
             settings.impactColor = new Color(1f, 0.05f, 0.02f, 0.58f);
             return;
         }
 
         settings.effectType = SkillEffectType.ChainExplosion;
-        settings.maxDamage = 10;
+        settings.maxDamage = 9;
         settings.chainMaxTotalDamage = 45;
-        settings.explosionRadiusWorld = 0.72f;
-        settings.terrainRadiusPx = 18;
+        settings.explosionRadiusWorld = 0.9f;
+        settings.terrainRadiusPx = 28;
         settings.knockbackForce = 7f;
         settings.chainCount = 6;
-        settings.chainSpacingWorld = 0.62f;
+        settings.chainSpacingWorld = 0.5f;
         settings.chainDelaySeconds = 0.11f;
         settings.impactColor = new Color(1f, 0.85f, 0.05f, 0.55f);
     }
@@ -362,6 +382,15 @@ public class DemoSkillSelector : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.F1)) SetCharacterKind(ObjectHeadCharacterKind.Bulb);
         if (Input.GetKeyDown(KeyCode.F2)) SetCharacterKind(ObjectHeadCharacterKind.Seed);
         if (Input.GetKeyDown(KeyCode.F3)) SetCharacterKind(ObjectHeadCharacterKind.Bomb);
+#endif
+    }
+
+    private static TurnManager FindTurnManager()
+    {
+#if UNITY_6000_0_OR_NEWER || UNITY_2023_1_OR_NEWER
+        return Object.FindAnyObjectByType<TurnManager>();
+#else
+        return Object.FindObjectOfType<TurnManager>();
 #endif
     }
 }

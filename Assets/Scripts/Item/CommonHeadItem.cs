@@ -35,7 +35,11 @@ public class CommonHeadItem : MonoBehaviour
 
     private void OnTriggerEnter2D(Collider2D other)
     {
-        CommonHeadInventory inventory = other.GetComponentInParent<CommonHeadInventory>();
+        ObjectHeadTeamMember member = other.GetComponentInParent<ObjectHeadTeamMember>();
+        PlayerInventoryManager manager = FindAny<PlayerInventoryManager>();
+        CommonHeadInventory inventory = member != null && manager != null
+            ? manager.GetInventory(member.PlayerIndex)
+            : null;
         if (inventory == null || !inventory.TryAdd(itemType, out int slotIndex))
         {
             return;
@@ -67,5 +71,14 @@ public class CommonHeadItem : MonoBehaviour
             default:
                 return Color.white;
         }
+    }
+
+    private static T FindAny<T>() where T : Object
+    {
+#if UNITY_6000_0_OR_NEWER || UNITY_2023_1_OR_NEWER
+        return Object.FindAnyObjectByType<T>();
+#else
+        return Object.FindObjectOfType<T>();
+#endif
     }
 }

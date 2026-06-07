@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -20,6 +20,7 @@ public class ObjectHeadCameraController : MonoBehaviour
     private Camera targetCamera;
     private Vector3 manualOffset;
     private bool overviewMode;
+    private bool manualControl;
     private bool forceCharacterFocus;
     private SkillProjectile lastSeenProjectile;
 
@@ -31,16 +32,8 @@ public class ObjectHeadCameraController : MonoBehaviour
 
     private void Start()
     {
-        if (terrain == null)
-        {
-            terrain = FindAny<TerrainManager>();
-        }
-
-        if (turnManager == null)
-        {
-            turnManager = FindAny<TurnManager>();
-        }
-
+        if (terrain == null) terrain = FindAny<TerrainManager>();
+        if (turnManager == null) turnManager = FindAny<TurnManager>();
         FocusOnCurrentTarget(true);
     }
 
@@ -51,9 +44,9 @@ public class ObjectHeadCameraController : MonoBehaviour
             return;
         }
 
+        ObserveProjectileStart();
         ReadManualInput();
-
-        if (overviewMode)
+        if (overviewMode || manualControl)
         {
             transform.position = ClampToTerrain(transform.position);
             return;
@@ -63,8 +56,10 @@ public class ObjectHeadCameraController : MonoBehaviour
         if (target != null)
         {
             Vector3 desired = new Vector3(target.position.x, target.position.y, transform.position.z) + manualOffset;
-            desired = ClampToTerrain(desired);
-            transform.position = Vector3.Lerp(transform.position, desired, Time.deltaTime * followLerp);
+            transform.position = Vector3.Lerp(
+                transform.position,
+                ClampToTerrain(desired),
+                Time.unscaledDeltaTime * followLerp);
         }
         else
         {
@@ -81,11 +76,7 @@ public class ObjectHeadCameraController : MonoBehaviour
 
     public void FitToTerrainOverview()
     {
-        if (targetCamera == null)
-        {
-            targetCamera = GetComponent<Camera>();
-        }
-
+        if (targetCamera == null) targetCamera = GetComponent<Camera>();
         if (terrain == null || terrain.WidthPx <= 0 || terrain.HeightPx <= 0)
         {
             return;
@@ -99,42 +90,41 @@ public class ObjectHeadCameraController : MonoBehaviour
         targetCamera.orthographicSize = Mathf.Max(minSize, Mathf.Max(sizeByHeight, sizeByWidth));
         manualOffset = Vector3.zero;
         overviewMode = true;
+        manualControl = false;
         forceCharacterFocus = false;
         transform.position = ClampToTerrain(new Vector3(center.x, center.y, transform.position.z));
     }
 
     private void FocusOnCurrentTarget(bool resetZoom)
     {
-        if (targetCamera == null)
-        {
-            targetCamera = GetComponent<Camera>();
-        }
-
+        if (targetCamera == null) targetCamera = GetComponent<Camera>();
         if (resetZoom)
         {
             targetCamera.orthographicSize = Mathf.Clamp(defaultPlaySize, minSize, maxSize);
         }
 
         overviewMode = false;
+        manualControl = false;
         forceCharacterFocus = true;
+        manualOffset = Vector3.zero;
         Transform target = turnManager != null && turnManager.CurrentCharacter != null
             ? turnManager.CurrentCharacter.transform
             : null;
         if (target != null)
         {
-            manualOffset = Vector3.zero;
             transform.position = ClampToTerrain(new Vector3(target.position.x, target.position.y, transform.position.z));
-            return;
         }
-
-        FitToTerrainOverview();
+        else
+        {
+            FitToTerrainOverview();
+        }
     }
 
     private void ReadManualInput()
     {
         Vector2 pan = Vector2.zero;
         float zoomDelta = 0f;
-        bool resetOffset = false;
+        bool focusCharacter = false;
         bool overview = false;
 
 #if ENABLE_INPUT_SYSTEM
@@ -147,7 +137,7 @@ public class ObjectHeadCameraController : MonoBehaviour
             if (keyboard.semicolonKey.isPressed) pan.x += 1f;
             if (keyboard.minusKey.isPressed || keyboard.numpadMinusKey.isPressed) zoomDelta += 1f;
             if (keyboard.equalsKey.isPressed || keyboard.numpadPlusKey.isPressed) zoomDelta -= 1f;
-            resetOffset = keyboard.iKey.wasPressedThisFrame;
+            focusCharacter = keyboard.iKey.wasPressedThisFrame;
             overview = keyboard.pKey.wasPressedThisFrame;
         }
 
@@ -155,11 +145,9 @@ public class ObjectHeadCameraController : MonoBehaviour
         if (mouse != null)
         {
             zoomDelta -= mouse.scroll.ReadValue().y * 0.035f;
-
             if (mouse.middleButton.isPressed || mouse.rightButton.isPressed)
             {
-                Vector2 delta = mouse.delta.ReadValue();
-                pan -= delta * 0.018f;
+                pan -= mouse.delta.ReadValue() * 0.018f;
             }
         }
 #else
@@ -175,7 +163,7 @@ public class ObjectHeadCameraController : MonoBehaviour
             pan.x -= Input.GetAxisRaw("Mouse X") * 12f;
             pan.y -= Input.GetAxisRaw("Mouse Y") * 12f;
         }
-        resetOffset = Input.GetKeyDown(KeyCode.I);
+        focusCharacter = Input.GetKeyDown(KeyCode.I);
         overview = Input.GetKeyDown(KeyCode.P);
 #endif
 
@@ -185,51 +173,34 @@ public class ObjectHeadCameraController : MonoBehaviour
             return;
         }
 
-        if (resetOffset)
+        if (focusCharacter)
         {
-            manualOffset = Vector3.zero;
             FocusOnCurrentTarget(false);
             return;
         }
 
         if (pan.sqrMagnitude > 0f)
         {
-            ExitOverviewAtCurrentPosition();
-            manualOffset += (Vector3)(pan.normalized * manualPanSpeed * Time.deltaTime);
+            overviewMode = false;
+            manualControl = true;
+            forceCharacterFocus = false;
+            transform.position = ClampToTerrain(
+                transform.position + (Vector3)(pan.normalized * manualPanSpeed * Time.unscaledDeltaTime));
         }
 
         if (Mathf.Abs(zoomDelta) > 0f)
         {
-            ExitOverviewAtCurrentPosition();
-            targetCamera.orthographicSize = Mathf.Clamp(targetCamera.orthographicSize + zoomDelta * zoomSpeed * Time.deltaTime, minSize, maxSize);
+            targetCamera.orthographicSize = Mathf.Clamp(
+                targetCamera.orthographicSize + zoomDelta * zoomSpeed * Time.unscaledDeltaTime,
+                minSize,
+                maxSize);
             transform.position = ClampToTerrain(transform.position);
         }
-    }
-
-    private void ExitOverviewAtCurrentPosition()
-    {
-        if (!overviewMode)
-        {
-            return;
-        }
-
-        overviewMode = false;
-        Transform target = FindFollowTarget();
-        manualOffset = target != null
-            ? transform.position - new Vector3(target.position.x, target.position.y, transform.position.z)
-            : Vector3.zero;
     }
 
     private Transform FindFollowTarget()
     {
         SkillProjectile projectile = FindAny<SkillProjectile>();
-        if (projectile != null && projectile != lastSeenProjectile)
-        {
-            lastSeenProjectile = projectile;
-            forceCharacterFocus = false;
-            manualOffset = Vector3.zero;
-        }
-
         if (!forceCharacterFocus && projectile != null && projectile.IsFlying)
         {
             return projectile.transform;
@@ -238,6 +209,21 @@ public class ObjectHeadCameraController : MonoBehaviour
         return turnManager != null && turnManager.CurrentCharacter != null
             ? turnManager.CurrentCharacter.transform
             : null;
+    }
+
+    private void ObserveProjectileStart()
+    {
+        SkillProjectile projectile = FindAny<SkillProjectile>();
+        if (projectile == null || projectile == lastSeenProjectile)
+        {
+            return;
+        }
+
+        lastSeenProjectile = projectile;
+        forceCharacterFocus = false;
+        manualControl = false;
+        overviewMode = false;
+        manualOffset = Vector3.zero;
     }
 
     private Vector3 ClampToTerrain(Vector3 position)
@@ -249,17 +235,15 @@ public class ObjectHeadCameraController : MonoBehaviour
 
         float halfHeight = targetCamera.orthographicSize;
         float halfWidth = halfHeight * targetCamera.aspect;
+        float terrainWidth = terrain.WidthPx / (float)terrain.PixelsPerUnit;
+        float terrainHeight = terrain.HeightPx / (float)terrain.PixelsPerUnit;
         float minX = terrain.TerrainOriginWorld.x + halfWidth - paddingWorld.x;
-        float maxX = terrain.TerrainOriginWorld.x + terrain.WidthPx / (float)terrain.PixelsPerUnit - halfWidth + paddingWorld.x;
+        float maxX = terrain.TerrainOriginWorld.x + terrainWidth - halfWidth + paddingWorld.x;
         float minY = terrain.TerrainOriginWorld.y + halfHeight - paddingWorld.y;
-        float maxY = terrain.TerrainOriginWorld.y + terrain.HeightPx / (float)terrain.PixelsPerUnit - halfHeight + paddingWorld.y;
+        float maxY = terrain.TerrainOriginWorld.y + terrainHeight - halfHeight + paddingWorld.y;
 
-        position.x = minX <= maxX
-            ? Mathf.Clamp(position.x, minX, maxX)
-            : terrain.TerrainOriginWorld.x + terrain.WidthPx / (2f * terrain.PixelsPerUnit);
-        position.y = minY <= maxY
-            ? Mathf.Clamp(position.y, minY, maxY)
-            : terrain.TerrainOriginWorld.y + terrain.HeightPx / (2f * terrain.PixelsPerUnit);
+        position.x = minX <= maxX ? Mathf.Clamp(position.x, minX, maxX) : terrain.TerrainOriginWorld.x + terrainWidth * 0.5f;
+        position.y = minY <= maxY ? Mathf.Clamp(position.y, minY, maxY) : terrain.TerrainOriginWorld.y + terrainHeight * 0.5f;
         return position;
     }
 
@@ -272,4 +256,3 @@ public class ObjectHeadCameraController : MonoBehaviour
 #endif
     }
 }
-

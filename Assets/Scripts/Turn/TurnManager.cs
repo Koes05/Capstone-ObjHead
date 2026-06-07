@@ -27,9 +27,15 @@ public class TurnManager : MonoBehaviour
     private int winningPlayerIndex = -1;
     private float remainingTurnSeconds;
     private int turnSerial;
+    private int roundSerial;
     private bool hasStartedAnyTurn;
+    private bool actionUsedThisTurn;
+    private bool turnEndRequested;
+    private bool victoryCheckPending;
 
     public event Action<TurnCharacterController> TurnStarted;
+    public event Action<TurnCharacterController> TurnEnded;
+    public event Action<int> RoundStarted;
     public event Action<TurnPhase> TurnPhaseChanged;
     public event Action<int> MatchEnded;
 
@@ -38,6 +44,9 @@ public class TurnManager : MonoBehaviour
     public int CurrentTurnIndex => currentTurnIndex;
     public TurnPhase CurrentPhase { get; private set; } = TurnPhase.Aiming;
     public int TurnSerial => turnSerial;
+    public int RoundSerial => roundSerial;
+    public bool ActionUsedThisTurn => actionUsedThisTurn;
+    public bool TurnEndRequested => turnEndRequested;
     public bool IsMatchOver => isMatchOver;
     public int WinningPlayerIndex => winningPlayerIndex;
     public float TurnDurationSeconds => turnDurationSeconds;
@@ -79,7 +88,6 @@ public class TurnManager : MonoBehaviour
         }
 
         SubscribeCharacterDeaths();
-
         if (CurrentCharacter != null)
         {
             return;
@@ -91,7 +99,8 @@ public class TurnManager : MonoBehaviour
             currentTurnIndex = FindNextTurnIndex(currentTurnIndex - 1);
         }
 
-        ApplyCurrentTurn();
+        roundSerial = 1;
+        ApplyCurrentTurn(true);
     }
 
     private void Update()
@@ -102,7 +111,6 @@ public class TurnManager : MonoBehaviour
         }
 
         TickTurnTimer();
-
         if (allowManualTurnEnd && WasEndTurnPressed())
         {
             EndTurn();
@@ -126,6 +134,7 @@ public class TurnManager : MonoBehaviour
         return character != null &&
                character == CurrentCharacter &&
                !isMatchOver &&
+               !actionUsedThisTurn &&
                CurrentPhase == TurnPhase.Aiming;
     }
 
@@ -136,6 +145,7 @@ public class TurnManager : MonoBehaviour
             return false;
         }
 
+        actionUsedThisTurn = true;
         SetPhase(TurnPhase.ProjectileFlying);
         return true;
     }
@@ -156,15 +166,26 @@ public class TurnManager : MonoBehaviour
         }
     }
 
-    public void NotifyActionResolved(bool endTurnAutomatically = true)
+    public void NotifyActionResolved(bool unusedLegacyAutoEnd = false)
     {
-        if (isMatchOver || CurrentCharacter == null)
+        if (isMatchOver)
+        {
+            return;
+        }
+
+        if (victoryCheckPending && TryResolveVictory())
+        {
+            return;
+        }
+
+        if (CurrentCharacter == null)
         {
             return;
         }
 
         SetPhase(TurnPhase.WaitingManualEnd);
-        if (endTurnAutomatically)
+        CharacterCombat combat = CurrentCharacter.GetComponent<CharacterCombat>();
+        if (turnEndRequested || remainingTurnSeconds <= 0f || (combat != null && combat.IsDead))
         {
             AdvanceTurn();
         }
@@ -177,8 +198,14 @@ public class TurnManager : MonoBehaviour
 
     public void EndTurn()
     {
-        if (isMatchOver || IsActionPending)
+        if (isMatchOver || CurrentCharacter == null)
         {
+            return;
+        }
+
+        if (IsActionPending)
+        {
+            turnEndRequested = true;
             return;
         }
 
@@ -202,17 +229,29 @@ public class TurnManager : MonoBehaviour
         characters = turnCharacters ?? new TurnCharacterController[0];
         isMatchOver = false;
         winningPlayerIndex = -1;
+        victoryCheckPending = false;
         currentTurnIndex = characters.Length == 0 ? -1 : Mathf.Clamp(startingIndex, 0, characters.Length - 1);
         turnSerial = 0;
+        roundSerial = characters.Length > 0 ? 1 : 0;
         hasStartedAnyTurn = false;
         SubscribeCharacterDeaths();
-        ApplyCurrentTurn();
+        ApplyCurrentTurn(characters.Length > 0);
     }
 
     public void NotifyCharacterDied(CharacterCombat combat)
     {
         if (isMatchOver || combat == null)
         {
+            return;
+        }
+
+        if (IsActionPending)
+        {
+            victoryCheckPending = true;
+            if (CurrentCharacter != null && combat.gameObject == CurrentCharacter.gameObject)
+            {
+                turnEndRequested = true;
+            }
             return;
         }
 
@@ -229,17 +268,25 @@ public class TurnManager : MonoBehaviour
 
     private void TickTurnTimer()
     {
-        if (CurrentCharacter == null || CurrentPhase != TurnPhase.Aiming)
+        if (CurrentCharacter == null || CurrentPhase == TurnPhase.MatchOver)
         {
             return;
         }
 
         remainingTurnSeconds = Mathf.Max(0f, remainingTurnSeconds - Time.deltaTime);
-        if (remainingTurnSeconds <= 0f)
+        if (remainingTurnSeconds > 0f)
         {
-            Debug.Log("Turn timer expired.");
-            AdvanceTurn();
+            return;
         }
+
+        if (IsActionPending)
+        {
+            turnEndRequested = true;
+            return;
+        }
+
+        Debug.Log("Turn timer expired.");
+        AdvanceTurn();
     }
 
     private void AdvanceTurn()
@@ -247,6 +294,13 @@ public class TurnManager : MonoBehaviour
         if (isMatchOver)
         {
             return;
+        }
+
+        TurnCharacterController endingCharacter = CurrentCharacter;
+        if (endingCharacter != null)
+        {
+            TurnEnded?.Invoke(endingCharacter);
+            endingCharacter.ResetTurnStatus();
         }
 
         if (characters == null || characters.Length == 0)
@@ -259,7 +313,8 @@ public class TurnManager : MonoBehaviour
             return;
         }
 
-        int nextIndex = FindNextTurnIndex(currentTurnIndex);
+        int previousIndex = currentTurnIndex;
+        int nextIndex = FindNextTurnIndex(previousIndex);
         if (nextIndex < 0)
         {
             ClearCurrentTurn();
@@ -267,11 +322,17 @@ public class TurnManager : MonoBehaviour
             return;
         }
 
+        bool wrappedRound = hasStartedAnyTurn && nextIndex <= previousIndex;
+        if (wrappedRound)
+        {
+            roundSerial++;
+        }
+
         currentTurnIndex = nextIndex;
-        ApplyCurrentTurn();
+        ApplyCurrentTurn(wrappedRound);
     }
 
-    private void ApplyCurrentTurn()
+    private void ApplyCurrentTurn(bool announceRound)
     {
         if (characters == null || characters.Length == 0 || currentTurnIndex < 0 || isMatchOver)
         {
@@ -281,7 +342,6 @@ public class TurnManager : MonoBehaviour
 
         currentTurnIndex = NormalizeIndex(currentTurnIndex);
         CurrentCharacter = characters[currentTurnIndex];
-
         if (!CanTakeTurn(CurrentCharacter))
         {
             int next = FindNextTurnIndex(currentTurnIndex);
@@ -295,15 +355,24 @@ public class TurnManager : MonoBehaviour
             CurrentCharacter = characters[currentTurnIndex];
         }
 
-        if (hasStartedAnyTurn)
+        for (int i = 0; i < characters.Length; i++)
         {
-            AdvanceHazardTurns();
+            characters[i]?.ResetTurnStatus();
         }
 
         hasStartedAnyTurn = true;
         turnSerial++;
+        actionUsedThisTurn = false;
+        turnEndRequested = false;
+        victoryCheckPending = false;
         remainingTurnSeconds = turnDurationSeconds;
         SetPhase(TurnPhase.Aiming);
+
+        if (announceRound)
+        {
+            RoundStarted?.Invoke(roundSerial);
+            Debug.Log($"Round {roundSerial} started.");
+        }
 
         DemoSkillSelector selector = CurrentCharacter != null ? CurrentCharacter.GetComponent<DemoSkillSelector>() : null;
         selector?.NotifyTurnStarted();
@@ -320,7 +389,6 @@ public class TurnManager : MonoBehaviour
     private void SetPhase(TurnPhase phase)
     {
         CurrentPhase = phase;
-
         if (characters != null)
         {
             for (int i = 0; i < characters.Length; i++)
@@ -333,7 +401,6 @@ public class TurnManager : MonoBehaviour
 
                 bool canMove = character == CurrentCharacter && CanCharacterMove(character);
                 character.SetControlEnabled(canMove);
-
                 if (!canMove)
                 {
                     character.StopHorizontalMovement();
@@ -344,24 +411,10 @@ public class TurnManager : MonoBehaviour
         TurnPhaseChanged?.Invoke(CurrentPhase);
     }
 
-    private void AdvanceHazardTurns()
-    {
-#if UNITY_6000_0_OR_NEWER || UNITY_2023_1_OR_NEWER
-        HazardZone[] zones = FindObjectsByType<HazardZone>(FindObjectsSortMode.None);
-#else
-        HazardZone[] zones = FindObjectsOfType<HazardZone>();
-#endif
-        for (int i = 0; i < zones.Length; i++)
-        {
-            zones[i]?.NotifyTurnAdvanced();
-        }
-    }
-
     private bool TryResolveVictory()
     {
         HashSet<int> alivePlayers = new HashSet<int>();
         bool hasTeamInfo = false;
-
         if (characters == null)
         {
             return false;
@@ -387,18 +440,16 @@ public class TurnManager : MonoBehaviour
             }
         }
 
-        if (!hasTeamInfo || alivePlayers.Count > 1)
+        if (!hasTeamInfo || alivePlayers.Count != 1)
         {
+            victoryCheckPending = false;
             return false;
         }
 
-        if (alivePlayers.Count == 1)
+        foreach (int player in alivePlayers)
         {
-            foreach (int player in alivePlayers)
-            {
-                EndMatch(player);
-                return true;
-            }
+            EndMatch(player);
+            return true;
         }
 
         return false;
@@ -420,7 +471,6 @@ public class TurnManager : MonoBehaviour
         CurrentCharacter = null;
         currentTurnIndex = -1;
         remainingTurnSeconds = 0f;
-
         if (characters == null)
         {
             return;
@@ -430,6 +480,7 @@ public class TurnManager : MonoBehaviour
         {
             if (character != null)
             {
+                character.ResetTurnStatus();
                 character.SetControlEnabled(false);
                 character.StopHorizontalMovement();
             }

@@ -12,6 +12,7 @@ public class CommonHeadUseController : MonoBehaviour
     [SerializeField, Min(1)] private int createdTerrainRadiusPx = 24;
 
     private CommonHeadInventory inventory;
+    private PlayerInventoryManager inventoryManager;
     private TurnCharacterController turnCharacter;
     private CharacterCombat combat;
     private AimController aimController;
@@ -19,7 +20,7 @@ public class CommonHeadUseController : MonoBehaviour
 
     private void Awake()
     {
-        inventory = GetComponent<CommonHeadInventory>();
+        inventoryManager = FindAny<PlayerInventoryManager>();
         turnCharacter = GetComponent<TurnCharacterController>();
         combat = GetComponent<CharacterCombat>();
         aimController = GetComponent<AimController>();
@@ -32,6 +33,16 @@ public class CommonHeadUseController : MonoBehaviour
         {
             turnManager = FindAny<TurnManager>();
         }
+
+        if (inventoryManager == null)
+        {
+            inventoryManager = FindAny<PlayerInventoryManager>();
+        }
+
+        ObjectHeadTeamMember member = GetComponent<ObjectHeadTeamMember>();
+        inventory = member != null && inventoryManager != null
+            ? inventoryManager.GetInventory(member.PlayerIndex)
+            : null;
 
         if (inventory == null ||
             turnManager == null ||
@@ -74,6 +85,7 @@ public class CommonHeadUseController : MonoBehaviour
 
     private void FireAttackHead()
     {
+        aimController?.ConfirmFacingFromAim();
         Vector2 direction = aimController != null ? aimController.AimDirection : Vector2.right;
         Vector2 origin = aimController != null ? aimController.AimOrigin : (Vector2)transform.position;
         ObjectHeadSkillSettings settings = ObjectHeadSkillSettings.CreateDefault(

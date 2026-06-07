@@ -29,6 +29,7 @@ public class TurnCharacterController : MonoBehaviour
     private readonly RaycastHit2D[] groundHits = new RaycastHit2D[4];
     private Rigidbody2D body;
     private Collider2D bodyCollider;
+    private CharacterVisual characterVisual;
     private float horizontalInput;
     private bool jumpRequested;
     private bool jumpHeld;
@@ -38,8 +39,9 @@ public class TurnCharacterController : MonoBehaviour
     private bool hasControl;
     private float externalMotionTimer;
     private float fallGravityTimer;
-    private float moveSpeedMultiplier = 1f;
-    private float moveSpeedMultiplierTimer;
+    private float timedMoveSpeedMultiplier = 1f;
+    private float timedMoveSpeedMultiplierTimer;
+    private float hazardMoveSpeedMultiplier = 1f;
 
     public bool HasControl => hasControl;
     public bool IsGrounded => isGrounded;
@@ -49,6 +51,7 @@ public class TurnCharacterController : MonoBehaviour
     {
         body = GetComponent<Rigidbody2D>();
         bodyCollider = GetComponent<Collider2D>();
+        characterVisual = GetComponent<CharacterVisual>();
         body.gravityScale = 0f;
     }
 
@@ -56,6 +59,7 @@ public class TurnCharacterController : MonoBehaviour
     {
         hasControl = false;
         ResetInput();
+        ClearHazardSlow();
     }
 
     private void Update()
@@ -85,7 +89,8 @@ public class TurnCharacterController : MonoBehaviour
         {
             if (canUseInput)
             {
-                velocity.x = horizontalInput * moveSpeed * moveSpeedMultiplier;
+                float multiplier = Mathf.Min(timedMoveSpeedMultiplier, hazardMoveSpeedMultiplier);
+                velocity.x = horizontalInput * moveSpeed * multiplier;
             }
             else if (isGrounded)
             {
@@ -94,7 +99,6 @@ public class TurnCharacterController : MonoBehaviour
         }
 
         externalMotionTimer = Mathf.Max(0f, externalMotionTimer - Time.fixedDeltaTime);
-
         if (isGrounded && velocity.y <= 0f)
         {
             isJumping = false;
@@ -113,18 +117,16 @@ public class TurnCharacterController : MonoBehaviour
             velocity.y = jumpForce * minJumpVelocityMultiplier;
         }
 
-        bool shouldUseHeldJumpGravity = isJumping && jumpHeld && velocity.y > 0f;
-
+        bool useHeldJumpGravity = isJumping && jumpHeld && velocity.y > 0f;
         if (isGrounded && velocity.y < 0f)
         {
             velocity.y = 0f;
         }
         else if (!isGrounded || velocity.y > 0f)
         {
-            float gravityMultiplier = shouldUseHeldJumpGravity ? heldJumpGravityMultiplier : GetFallingGravityMultiplier();
+            float gravityMultiplier = useHeldJumpGravity ? heldJumpGravityMultiplier : GetFallingGravityMultiplier();
             velocity.y = Mathf.Max(velocity.y - customGravity * gravityMultiplier * Time.fixedDeltaTime, -maxFallSpeed);
-
-            if (!shouldUseHeldJumpGravity)
+            if (!useHeldJumpGravity)
             {
                 fallGravityTimer += Time.fixedDeltaTime;
             }
@@ -138,7 +140,6 @@ public class TurnCharacterController : MonoBehaviour
     public void SetControlEnabled(bool enabled)
     {
         hasControl = enabled && IsTurnAvailable;
-
         if (!hasControl)
         {
             ResetInput();
@@ -153,13 +154,27 @@ public class TurnCharacterController : MonoBehaviour
 
     public void ApplyMoveSpeedMultiplier(float multiplier, float seconds)
     {
-        moveSpeedMultiplier = Mathf.Min(moveSpeedMultiplier, Mathf.Clamp(multiplier, 0.1f, 1f));
-        moveSpeedMultiplierTimer = Mathf.Max(moveSpeedMultiplierTimer, seconds);
+        timedMoveSpeedMultiplier = Mathf.Min(timedMoveSpeedMultiplier, Mathf.Clamp(multiplier, 0.1f, 1f));
+        timedMoveSpeedMultiplierTimer = Mathf.Max(timedMoveSpeedMultiplierTimer, seconds);
     }
 
-    private bool ShouldPreserveExternalMotion(Vector2 velocity)
+    public void SetHazardMoveSpeedMultiplier(float multiplier)
     {
-        return externalMotionTimer > 0f && (!isGrounded || velocity.y > ExternalMotionGroundedYThreshold);
+        hazardMoveSpeedMultiplier = Mathf.Clamp(multiplier, 0.1f, 1f);
+    }
+
+    public void ClearHazardSlow()
+    {
+        hazardMoveSpeedMultiplier = 1f;
+    }
+
+    public void ResetTurnStatus()
+    {
+        timedMoveSpeedMultiplier = 1f;
+        timedMoveSpeedMultiplierTimer = 0f;
+        hazardMoveSpeedMultiplier = 1f;
+        externalMotionTimer = 0f;
+        ResetInput();
     }
 
     public void StopHorizontalMovement()
@@ -179,6 +194,11 @@ public class TurnCharacterController : MonoBehaviour
         body.linearVelocity = velocity;
     }
 
+    private bool ShouldPreserveExternalMotion(Vector2 velocity)
+    {
+        return externalMotionTimer > 0f && (!isGrounded || velocity.y > ExternalMotionGroundedYThreshold);
+    }
+
 #if ENABLE_INPUT_SYSTEM
     private void ReadInputSystemKeyboard()
     {
@@ -190,20 +210,12 @@ public class TurnCharacterController : MonoBehaviour
         }
 
         horizontalInput = 0f;
-
-        if (keyboard.aKey.isPressed)
-        {
-            horizontalInput -= 1f;
-        }
-
-        if (keyboard.dKey.isPressed)
-        {
-            horizontalInput += 1f;
-        }
+        if (keyboard.aKey.isPressed) horizontalInput -= 1f;
+        if (keyboard.dKey.isPressed) horizontalInput += 1f;
+        UpdateFacingFromMovement();
 
         bool wasJumpHeld = jumpHeld;
         jumpHeld = keyboard.wKey.isPressed || keyboard.enterKey.isPressed || keyboard.numpadEnterKey.isPressed;
-
         if (keyboard.wKey.wasPressedThisFrame || keyboard.enterKey.wasPressedThisFrame || keyboard.numpadEnterKey.wasPressedThisFrame)
         {
             jumpRequested = true;
@@ -218,20 +230,12 @@ public class TurnCharacterController : MonoBehaviour
     private void ReadLegacyKeyboard()
     {
         horizontalInput = 0f;
-
-        if (Input.GetKey(KeyCode.A))
-        {
-            horizontalInput -= 1f;
-        }
-
-        if (Input.GetKey(KeyCode.D))
-        {
-            horizontalInput += 1f;
-        }
+        if (Input.GetKey(KeyCode.A)) horizontalInput -= 1f;
+        if (Input.GetKey(KeyCode.D)) horizontalInput += 1f;
+        UpdateFacingFromMovement();
 
         bool wasJumpHeld = jumpHeld;
         jumpHeld = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.Return) || Input.GetKey(KeyCode.KeypadEnter);
-
         if (Input.GetKeyDown(KeyCode.W) || Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
         {
             jumpRequested = true;
@@ -243,6 +247,18 @@ public class TurnCharacterController : MonoBehaviour
         }
     }
 #endif
+
+    private void UpdateFacingFromMovement()
+    {
+        if (horizontalInput < -0.01f)
+        {
+            characterVisual?.SetFacingRight(false);
+        }
+        else if (horizontalInput > 0.01f)
+        {
+            characterVisual?.SetFacingRight(true);
+        }
+    }
 
     private void ResetInput()
     {
@@ -256,27 +272,25 @@ public class TurnCharacterController : MonoBehaviour
     {
         if (gravityReturnDuration > 0f && fallGravityTimer < gravityReturnDuration)
         {
-            float returnProgress = fallGravityTimer / gravityReturnDuration;
-            return Mathf.Lerp(heldJumpGravityMultiplier, 1f, returnProgress);
+            return Mathf.Lerp(heldJumpGravityMultiplier, 1f, fallGravityTimer / gravityReturnDuration);
         }
 
         float accelerationTime = Mathf.Max(0f, fallGravityTimer - gravityReturnDuration);
-        float multiplier = 1f + accelerationTime * fallGravityIncreasePerSecond;
-        return Mathf.Min(multiplier, maxGravityMultiplier);
+        return Mathf.Min(1f + accelerationTime * fallGravityIncreasePerSecond, maxGravityMultiplier);
     }
 
     private void UpdateTemporaryMoveSpeedMultiplier()
     {
-        if (moveSpeedMultiplierTimer <= 0f)
+        if (timedMoveSpeedMultiplierTimer <= 0f)
         {
-            moveSpeedMultiplier = 1f;
+            timedMoveSpeedMultiplier = 1f;
             return;
         }
 
-        moveSpeedMultiplierTimer = Mathf.Max(0f, moveSpeedMultiplierTimer - Time.fixedDeltaTime);
-        if (moveSpeedMultiplierTimer <= 0f)
+        timedMoveSpeedMultiplierTimer = Mathf.Max(0f, timedMoveSpeedMultiplierTimer - Time.fixedDeltaTime);
+        if (timedMoveSpeedMultiplierTimer <= 0f)
         {
-            moveSpeedMultiplier = 1f;
+            timedMoveSpeedMultiplier = 1f;
         }
     }
 
@@ -286,7 +300,6 @@ public class TurnCharacterController : MonoBehaviour
         filter.useTriggers = false;
         filter.SetLayerMask(groundLayer);
         filter.useLayerMask = true;
-
-        return bodyCollider.Cast(Vector2.down, filter, groundHits, groundCheckDistance) > 0;
+        return bodyCollider != null && bodyCollider.Cast(Vector2.down, filter, groundHits, groundCheckDistance) > 0;
     }
 }

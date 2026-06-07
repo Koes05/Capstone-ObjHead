@@ -20,13 +20,14 @@ public class SkillProjectile : MonoBehaviour
     private float explosionFadeSeconds;
     private float remainingLifetime;
     private bool isCompleted;
+    private bool isFlying;
     private Rigidbody2D body;
     private Vector2 lastVelocity;
     private TerrainManager terrain;
     private Vector2 previousPosition;
     private bool hasPreviousPosition;
 
-    public bool IsFlying => !isCompleted;
+    public bool IsFlying => isFlying && !isCompleted;
 
     public void Initialize(
         Vector2 velocity,
@@ -56,6 +57,7 @@ public class SkillProjectile : MonoBehaviour
         hasPreviousPosition = true;
         terrain = FindTerrainManager();
         skillSettings = settings;
+        isFlying = true;
 
         if (skillSettings.explosionRadiusWorld <= 0f)
         {
@@ -157,6 +159,7 @@ public class SkillProjectile : MonoBehaviour
         }
 
         isCompleted = true;
+        isFlying = false;
 
         if (skillSettings.effectType == SkillEffectType.DelayedExplosion && skillSettings.delaySeconds > 0f)
         {
@@ -254,8 +257,8 @@ public class SkillProjectile : MonoBehaviour
                 break;
             case SkillEffectType.CreateHazardZone:
             case SkillEffectType.CreateSlowZone:
-                CreateHazardZone(impactPoint);
                 ApplyDamage(impactPoint, fallbackHorizontalSign);
+                CreateHazardZone(impactPoint);
                 break;
             case SkillEffectType.DelayedExplosion:
             case SkillEffectType.DamageExplosion:
@@ -460,17 +463,19 @@ public class SkillProjectile : MonoBehaviour
 
     private void CreateHazardZone(Vector2 impactPoint)
     {
-        if (skillSettings.zoneDurationTurns <= 0 || skillSettings.zoneDamagePerTick <= 0)
+        if (skillSettings.zoneDurationRounds <= 0 ||
+            skillSettings.zoneLengthWorld <= 0f ||
+            skillSettings.zoneDamagePerTurn <= 0)
         {
             return;
         }
 
-        HazardZone.Create(
+        GroundHazardZone.Create(
             impactPoint,
-            skillSettings.explosionRadiusWorld,
-            skillSettings.zoneDurationTurns,
-            skillSettings.zoneDamagePerTick,
-            skillSettings.zoneTickSeconds,
+            skillSettings.zoneLengthWorld,
+            skillSettings.zoneThicknessWorld,
+            skillSettings.zoneDurationRounds,
+            skillSettings.zoneDamagePerTurn,
             skillSettings.slowMultiplier,
             skillSettings.impactColor,
             owner,

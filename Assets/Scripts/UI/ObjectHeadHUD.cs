@@ -68,6 +68,7 @@ public class ObjectHeadHUD : MonoBehaviour
         string playerText = member != null ? $"P{member.PlayerIndex} / Slot {member.TeamSlotIndex}" : current.name;
         string kindText = selector != null ? selector.CharacterKind.ToString() : "Unknown";
         GUILayout.Label($"Turn: {playerText}  {kindText}", labelStyle);
+        GUILayout.Label($"Round: {turnManager.RoundSerial}", labelStyle);
         GUILayout.Label($"Phase: {turnManager.CurrentPhase}", labelStyle);
         GUILayout.Label($"Time: {Mathf.CeilToInt(turnManager.RemainingTurnSeconds)}s", turnManager.RemainingTurnSeconds <= 5f ? warningStyle : labelStyle);
         DrawHorizontalMeter(turnManager.TurnTime01, new Color(0.25f, 0.85f, 1f, 0.95f), 348f, 8f);
@@ -91,7 +92,11 @@ public class ObjectHeadHUD : MonoBehaviour
             return;
         }
 
-        CommonHeadInventory inventory = turnManager.CurrentCharacter.GetComponent<CommonHeadInventory>();
+        ObjectHeadTeamMember member = turnManager.CurrentCharacter.GetComponent<ObjectHeadTeamMember>();
+        PlayerInventoryManager manager = FindAny<PlayerInventoryManager>();
+        CommonHeadInventory inventory = member != null && manager != null
+            ? manager.GetInventory(member.PlayerIndex)
+            : null;
         if (inventory == null)
         {
             return;

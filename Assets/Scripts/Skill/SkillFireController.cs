@@ -76,6 +76,8 @@ public class SkillFireController : MonoBehaviour
             return;
         }
 
+        aimController.ConfirmFacingFromAim();
+
         if (skillSelector != null && !skillSelector.CanUseSelectedSkill())
         {
             Debug.Log($"{name} cannot fire skill {skillSelector.SelectedSkillIndex + 1}: cooldown {skillSelector.GetRemainingCooldown(skillSelector.SelectedSkillIndex)}.");

@@ -55,6 +55,14 @@ public class CharacterCombat : MonoBehaviour
         knockbackResistance = Mathf.Max(0.1f, knockbackResistanceValue);
         currentHp = maxHp;
         isDead = false;
+        if (bodyCollider != null)
+        {
+            bodyCollider.enabled = true;
+        }
+        if (body != null)
+        {
+            body.simulated = true;
+        }
     }
 
     public void TakeDamage(int damage)
@@ -109,6 +117,12 @@ public class CharacterCombat : MonoBehaviour
         if (body != null)
         {
             body.linearVelocity = Vector2.zero;
+            body.simulated = false;
+        }
+
+        if (bodyCollider != null)
+        {
+            bodyCollider.enabled = false;
         }
 
         if (characterVisual != null)

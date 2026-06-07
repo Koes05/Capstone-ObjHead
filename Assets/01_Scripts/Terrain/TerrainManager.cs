@@ -1,12 +1,16 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 [DisallowMultipleComponent]
 [RequireComponent(typeof(SpriteRenderer))]
 public class TerrainManager : MonoBehaviour
 {
     [Header("Source")]
-    [SerializeField] private Texture2D sourceTexture;
+    [FormerlySerializedAs("sourceTexture")]
+    [SerializeField] private Texture2D visualSourceTexture;
+    [SerializeField] private Texture2D collisionMaskTexture;
     [SerializeField] private SpriteRenderer terrainRenderer;
     [SerializeField] private Transform chunkRoot;
 
@@ -16,20 +20,23 @@ public class TerrainManager : MonoBehaviour
 
     [Header("Collision")]
     [SerializeField] private int chunkSizePx = 64;
-    [SerializeField] private int collisionCellSizePx = 8;
+    [SerializeField] private int collisionCellSizePx = 4;
     [SerializeField, Range(0f, 1f)] private float collisionSolidRatioThreshold = 0.4f;
+    [FormerlySerializedAs("alphaThreshold")]
+    [SerializeField, Range(0f, 1f)] private float maskAlphaThreshold = 0.1f;
     [SerializeField] private bool buildCollidersOnStart = true;
 
-    [Header("Terrain Colors")]
+    [Header("Terrain Rules")]
+    [SerializeField] private bool useIndestructibleTerrain;
     [SerializeField] private Color baseTerrainColor = new Color32(126, 82, 45, 255);
     [SerializeField] private Color createdTerrainColor = new Color32(105, 190, 84, 255);
     [SerializeField] private Color indestructibleTerrainColor = new Color32(118, 122, 128, 255);
-    [SerializeField, Range(0f, 1f)] private float alphaThreshold = 0.1f;
 
     [Header("Debug")]
     [SerializeField] private bool drawChunkGizmos = true;
 
-    private Texture2D runtimeTexture;
+    private Texture2D runtimeVisualTexture;
+    private Texture2D runtimeCollisionTexture;
     private Sprite runtimeSprite;
     private bool[,] solidMask;
     private TerrainType[,] terrainTypeMask;
@@ -37,30 +44,19 @@ public class TerrainManager : MonoBehaviour
     private readonly HashSet<TerrainChunk> dirtyChunks = new HashSet<TerrainChunk>();
     private bool initialized;
 
-    public int WidthPx
-    {
-        get { return runtimeTexture != null ? runtimeTexture.width : sourceTexture != null ? sourceTexture.width : 0; }
-    }
+    public event Action TerrainChanged;
 
-    public int HeightPx
-    {
-        get { return runtimeTexture != null ? runtimeTexture.height : sourceTexture != null ? sourceTexture.height : 0; }
-    }
-
-    public int PixelsPerUnit
-    {
-        get { return Mathf.Max(1, pixelsPerUnit); }
-    }
-
-    public Vector2 TerrainOriginWorld
-    {
-        get { return terrainOriginWorld; }
-    }
-
-    public bool IsInitialized
-    {
-        get { return initialized; }
-    }
+    public int WidthPx => runtimeVisualTexture != null
+        ? runtimeVisualTexture.width
+        : visualSourceTexture != null ? visualSourceTexture.width : 0;
+    public int HeightPx => runtimeVisualTexture != null
+        ? runtimeVisualTexture.height
+        : visualSourceTexture != null ? visualSourceTexture.height : 0;
+    public int PixelsPerUnit => Mathf.Max(1, pixelsPerUnit);
+    public Vector2 TerrainOriginWorld => terrainOriginWorld;
+    public bool IsInitialized => initialized;
+    public Texture2D RuntimeVisualTexture => runtimeVisualTexture;
+    public Texture2D RuntimeCollisionTexture => runtimeCollisionTexture;
 
     private void Reset()
     {
@@ -69,31 +65,59 @@ public class TerrainManager : MonoBehaviour
 
     private void Start()
     {
-        if (!initialized && sourceTexture != null)
+        if (!initialized && visualSourceTexture != null)
         {
             InitializeTerrain();
         }
     }
 
-    public void Configure(Texture2D terrainTexture, SpriteRenderer renderer, Transform terrainChunkRoot, Vector2 originWorld, int ppu, int chunkSize, int collisionCellSize)
+    public void Configure(
+        Texture2D terrainTexture,
+        SpriteRenderer renderer,
+        Transform terrainChunkRoot,
+        Vector2 originWorld,
+        int ppu,
+        int chunkSize,
+        int collisionCellSize)
     {
-        sourceTexture = terrainTexture;
+        Configure(terrainTexture, null, renderer, terrainChunkRoot, originWorld, ppu, chunkSize, collisionCellSize);
+    }
+
+    public void Configure(
+        Texture2D terrainVisualTexture,
+        Texture2D terrainCollisionMask,
+        SpriteRenderer renderer,
+        Transform terrainChunkRoot,
+        Vector2 originWorld,
+        int ppu,
+        int chunkSize,
+        int collisionCellSize)
+    {
+        visualSourceTexture = terrainVisualTexture;
+        collisionMaskTexture = terrainCollisionMask;
         terrainRenderer = renderer;
         chunkRoot = terrainChunkRoot;
         terrainOriginWorld = originWorld;
         pixelsPerUnit = Mathf.Max(1, ppu);
         chunkSizePx = Mathf.Max(1, chunkSize);
-        collisionCellSizePx = Mathf.Max(1, collisionCellSize);
-
+        collisionCellSizePx = NormalizeCollisionCellSize(collisionCellSize);
         InitializeTerrain();
     }
 
     public void InitializeTerrain()
     {
-        if (sourceTexture == null)
+        if (visualSourceTexture == null)
         {
-            Debug.LogError("TerrainManager needs a source texture.");
+            Debug.LogError("TerrainManager needs a visual source texture.");
             return;
+        }
+
+        Texture2D maskSource = collisionMaskTexture;
+        if (maskSource != null &&
+            (maskSource.width != visualSourceTexture.width || maskSource.height != visualSourceTexture.height))
+        {
+            Debug.LogWarning("Collision mask resolution differs from the visual texture. Falling back to visual alpha.");
+            maskSource = null;
         }
 
         if (terrainRenderer == null)
@@ -101,15 +125,19 @@ public class TerrainManager : MonoBehaviour
             terrainRenderer = GetComponent<SpriteRenderer>();
         }
 
-        runtimeTexture = CreateReadableRuntimeTexture(sourceTexture);
-        runtimeTexture.name = sourceTexture.name + "_Runtime";
-        runtimeTexture.filterMode = FilterMode.Point;
-        runtimeTexture.wrapMode = TextureWrapMode.Clamp;
+        runtimeVisualTexture = CreateReadableRuntimeTexture(visualSourceTexture);
+        runtimeVisualTexture.name = visualSourceTexture.name + "_RuntimeVisual";
+        runtimeVisualTexture.filterMode = FilterMode.Point;
+        runtimeVisualTexture.wrapMode = TextureWrapMode.Clamp;
 
-        BuildMasksFromRuntimeTexture();
+        runtimeCollisionTexture = CreateReadableRuntimeTexture(maskSource != null ? maskSource : visualSourceTexture);
+        runtimeCollisionTexture.name = (maskSource != null ? maskSource.name : visualSourceTexture.name) + "_RuntimeCollision";
+        runtimeCollisionTexture.filterMode = FilterMode.Point;
+        runtimeCollisionTexture.wrapMode = TextureWrapMode.Clamp;
+
+        BuildMasks();
         ApplyRuntimeSprite();
         BuildChunks();
-
         initialized = true;
 
         if (buildCollidersOnStart)
@@ -128,16 +156,14 @@ public class TerrainManager : MonoBehaviour
         Vector2 local = worldPosition - terrainOriginWorld;
         return new Vector2Int(
             Mathf.FloorToInt(local.x * PixelsPerUnit),
-            Mathf.FloorToInt(local.y * PixelsPerUnit)
-        );
+            Mathf.FloorToInt(local.y * PixelsPerUnit));
     }
 
     public Vector2 PixelToWorld(Vector2Int pixel)
     {
         return terrainOriginWorld + new Vector2(
             (pixel.x + 0.5f) / PixelsPerUnit,
-            (pixel.y + 0.5f) / PixelsPerUnit
-        );
+            (pixel.y + 0.5f) / PixelsPerUnit);
     }
 
     public bool IsPixelInBounds(Vector2Int pixel)
@@ -176,13 +202,10 @@ public class TerrainManager : MonoBehaviour
 
         float distance = Vector2.Distance(previousWorld, currentWorld);
         int steps = Mathf.Max(1, Mathf.CeilToInt(distance * PixelsPerUnit * 2f));
-
         for (int i = 0; i <= steps; i++)
         {
-            float t = i / (float)steps;
-            Vector2 sample = Vector2.Lerp(previousWorld, currentWorld, t);
+            Vector2 sample = Vector2.Lerp(previousWorld, currentWorld, i / (float)steps);
             Vector2Int pixel = WorldToPixel(sample);
-
             if (IsPixelInBounds(pixel) && solidMask[pixel.x, pixel.y])
             {
                 return new TerrainHit(true, sample, pixel, terrainTypeMask[pixel.x, pixel.y]);
@@ -200,7 +223,7 @@ public class TerrainManager : MonoBehaviour
 
     public bool DestroyCircle(Vector2 worldCenter, int radiusPx)
     {
-        if (!EnsureInitialized())
+        if (!EnsureInitialized() || radiusPx <= 0)
         {
             return false;
         }
@@ -220,9 +243,13 @@ public class TerrainManager : MonoBehaviour
         return CreateCircle(worldCenter, radiusPx, terrainType, null);
     }
 
-    public bool CreateCircle(Vector2 worldCenter, int radiusPx, TerrainType terrainType, IEnumerable<Collider2D> blockedColliders)
+    public bool CreateCircle(
+        Vector2 worldCenter,
+        int radiusPx,
+        TerrainType terrainType,
+        IEnumerable<Collider2D> blockedColliders)
     {
-        if (!EnsureInitialized())
+        if (!EnsureInitialized() || radiusPx <= 0)
         {
             return false;
         }
@@ -245,16 +272,13 @@ public class TerrainManager : MonoBehaviour
         }
 
         direction.Normalize();
-
         int brushRadius = Mathf.Max(1, thicknessPx);
         float length = Mathf.Max(0f, lengthWorldUnits);
-        int steps = Mathf.Max(1, Mathf.CeilToInt(length * PixelsPerUnit / Mathf.Max(1, brushRadius)));
+        int steps = Mathf.Max(1, Mathf.CeilToInt(length * PixelsPerUnit / brushRadius));
         bool changed = false;
-
         for (int i = 0; i <= steps; i++)
         {
-            float t = i / (float)steps;
-            Vector2 point = startWorld + direction * (length * t);
+            Vector2 point = startWorld + direction * (length * i / steps);
             changed |= CreateCircleInternal(point, brushRadius, TerrainType.Created, null);
         }
 
@@ -273,10 +297,7 @@ public class TerrainManager : MonoBehaviour
         {
             for (int y = 0; y < chunks.GetLength(1); y++)
             {
-                if (chunks[x, y] != null)
-                {
-                    chunks[x, y].RebuildColliders();
-                }
+                chunks[x, y]?.RebuildColliders();
             }
         }
 
@@ -287,10 +308,7 @@ public class TerrainManager : MonoBehaviour
     {
         foreach (TerrainChunk chunk in dirtyChunks)
         {
-            if (chunk != null)
-            {
-                chunk.RebuildColliders();
-            }
+            chunk?.RebuildColliders();
         }
 
         dirtyChunks.Clear();
@@ -302,7 +320,6 @@ public class TerrainManager : MonoBehaviour
         int minY = Mathf.Clamp(y, 0, HeightPx);
         int maxX = Mathf.Clamp(x + width, 0, WidthPx);
         int maxY = Mathf.Clamp(y + height, 0, HeightPx);
-
         int totalPixels = Mathf.Max(0, maxX - minX) * Mathf.Max(0, maxY - minY);
         if (totalPixels <= 0)
         {
@@ -326,10 +343,7 @@ public class TerrainManager : MonoBehaviour
 
     internal Vector2 PixelRectCenterToLocal(int x, int y, int width, int height)
     {
-        return new Vector2(
-            (x + width * 0.5f) / PixelsPerUnit,
-            (y + height * 0.5f) / PixelsPerUnit
-        );
+        return new Vector2((x + width * 0.5f) / PixelsPerUnit, (y + height * 0.5f) / PixelsPerUnit);
     }
 
     internal Vector2 PixelSizeToWorldSize(int width, int height)
@@ -350,7 +364,6 @@ public class TerrainManager : MonoBehaviour
             {
                 int dx = x - center.x;
                 int dy = y - center.y;
-
                 if (dx * dx + dy * dy > radiusSquared)
                 {
                     continue;
@@ -370,8 +383,9 @@ public class TerrainManager : MonoBehaviour
 
                 solidMask[x, y] = false;
                 terrainTypeMask[x, y] = TerrainType.Empty;
-                runtimeTexture.SetPixel(x, y, Color.clear);
-                MarkDirtyPixel(x, y);
+                runtimeVisualTexture.SetPixel(x, y, Color.clear);
+                runtimeCollisionTexture.SetPixel(x, y, Color.clear);
+                MarkDirtyPixelAndNeighbors(x, y);
                 changed = true;
             }
         }
@@ -379,7 +393,11 @@ public class TerrainManager : MonoBehaviour
         return changed;
     }
 
-    private bool CreateCircleInternal(Vector2 worldCenter, int radiusPx, TerrainType terrainType, IEnumerable<Collider2D> blockedColliders)
+    private bool CreateCircleInternal(
+        Vector2 worldCenter,
+        int radiusPx,
+        TerrainType terrainType,
+        IEnumerable<Collider2D> blockedColliders)
     {
         Vector2Int center = WorldToPixel(worldCenter);
         int radius = Mathf.Max(1, radiusPx);
@@ -393,7 +411,6 @@ public class TerrainManager : MonoBehaviour
             {
                 int dx = x - center.x;
                 int dy = y - center.y;
-
                 if (dx * dx + dy * dy > radiusSquared)
                 {
                     continue;
@@ -413,8 +430,9 @@ public class TerrainManager : MonoBehaviour
 
                 solidMask[x, y] = true;
                 terrainTypeMask[x, y] = terrainType;
-                runtimeTexture.SetPixel(x, y, fillColor);
-                MarkDirtyPixel(x, y);
+                runtimeVisualTexture.SetPixel(x, y, fillColor);
+                runtimeCollisionTexture.SetPixel(x, y, Color.white);
+                MarkDirtyPixelAndNeighbors(x, y);
                 changed = true;
             }
         }
@@ -422,7 +440,7 @@ public class TerrainManager : MonoBehaviour
         return changed;
     }
 
-    private bool IsBlockedByCollider(Vector2 worldPoint, IEnumerable<Collider2D> blockedColliders)
+    private static bool IsBlockedByCollider(Vector2 worldPoint, IEnumerable<Collider2D> blockedColliders)
     {
         if (blockedColliders == null)
         {
@@ -447,48 +465,44 @@ public class TerrainManager : MonoBehaviour
             return;
         }
 
-        runtimeTexture.Apply(false);
+        runtimeVisualTexture.Apply(false);
+        runtimeCollisionTexture.Apply(false);
         RebuildDirtyChunks();
+        TerrainChanged?.Invoke();
     }
 
-    private void BuildMasksFromRuntimeTexture()
+    private void BuildMasks()
     {
-        int width = runtimeTexture.width;
-        int height = runtimeTexture.height;
+        int width = runtimeVisualTexture.width;
+        int height = runtimeVisualTexture.height;
         solidMask = new bool[width, height];
         terrainTypeMask = new TerrainType[width, height];
-
-        Color32[] pixels = runtimeTexture.GetPixels32();
-        int alphaCutoff = Mathf.RoundToInt(alphaThreshold * 255f);
+        Color32[] collisionPixels = runtimeCollisionTexture.GetPixels32();
+        int alphaCutoff = Mathf.RoundToInt(maskAlphaThreshold * 255f);
 
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
             {
-                int index = y * width + x;
-                Color32 pixel = pixels[index];
-
+                Color32 pixel = collisionPixels[y * width + x];
                 if (pixel.a <= alphaCutoff)
                 {
                     solidMask[x, y] = false;
                     terrainTypeMask[x, y] = TerrainType.Empty;
-                    pixels[index] = new Color32(0, 0, 0, 0);
                     continue;
                 }
 
                 solidMask[x, y] = true;
-                terrainTypeMask[x, y] = IsIndestructibleColor(pixel) ? TerrainType.Indestructible : TerrainType.Base;
+                terrainTypeMask[x, y] = useIndestructibleTerrain && IsIndestructibleColor(pixel)
+                    ? TerrainType.Indestructible
+                    : TerrainType.Base;
             }
         }
-
-        runtimeTexture.SetPixels32(pixels);
-        runtimeTexture.Apply(false);
     }
 
-    private Texture2D CreateReadableRuntimeTexture(Texture2D texture)
+    private static Texture2D CreateReadableRuntimeTexture(Texture2D texture)
     {
         Texture2D copy = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false);
-
         if (texture.isReadable)
         {
             copy.SetPixels32(texture.GetPixels32());
@@ -498,39 +512,30 @@ public class TerrainManager : MonoBehaviour
 
         RenderTexture previous = RenderTexture.active;
         RenderTexture temporary = RenderTexture.GetTemporary(texture.width, texture.height, 0, RenderTextureFormat.ARGB32);
-
         Graphics.Blit(texture, temporary);
         RenderTexture.active = temporary;
         copy.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
         copy.Apply(false);
-
         RenderTexture.active = previous;
         RenderTexture.ReleaseTemporary(temporary);
-
         return copy;
     }
 
-    private bool IsIndestructibleColor(Color32 color)
+    private static bool IsIndestructibleColor(Color32 color)
     {
         int max = Mathf.Max(color.r, Mathf.Max(color.g, color.b));
         int min = Mathf.Min(color.r, Mathf.Min(color.g, color.b));
-        bool looksGray = max - min <= 18;
-        bool brightEnough = max >= 70;
-        return looksGray && brightEnough;
+        return max - min <= 18 && max >= 70;
     }
 
     private Color ColorForTerrainType(TerrainType terrainType)
     {
         switch (terrainType)
         {
-            case TerrainType.Created:
-                return createdTerrainColor;
-            case TerrainType.Indestructible:
-                return indestructibleTerrainColor;
-            case TerrainType.Base:
-                return baseTerrainColor;
-            default:
-                return Color.clear;
+            case TerrainType.Created: return createdTerrainColor;
+            case TerrainType.Indestructible: return indestructibleTerrainColor;
+            case TerrainType.Base: return baseTerrainColor;
+            default: return Color.clear;
         }
     }
 
@@ -543,25 +548,17 @@ public class TerrainManager : MonoBehaviour
 
         if (runtimeSprite != null)
         {
-            if (Application.isPlaying)
-            {
-                Destroy(runtimeSprite);
-            }
-            else
-            {
-                DestroyImmediate(runtimeSprite);
-            }
+            if (Application.isPlaying) Destroy(runtimeSprite);
+            else DestroyImmediate(runtimeSprite);
         }
 
         runtimeSprite = Sprite.Create(
-            runtimeTexture,
-            new Rect(0, 0, runtimeTexture.width, runtimeTexture.height),
+            runtimeVisualTexture,
+            new Rect(0, 0, runtimeVisualTexture.width, runtimeVisualTexture.height),
             Vector2.zero,
             PixelsPerUnit,
             0,
-            SpriteMeshType.FullRect
-        );
-
+            SpriteMeshType.FullRect);
         terrainRenderer.sprite = runtimeSprite;
         terrainRenderer.transform.position = new Vector3(terrainOriginWorld.x, terrainOriginWorld.y, terrainRenderer.transform.position.z);
     }
@@ -577,7 +574,6 @@ public class TerrainManager : MonoBehaviour
 
         chunkRoot.position = new Vector3(terrainOriginWorld.x, terrainOriginWorld.y, 0f);
         ClearChunkChildren();
-
         int columns = Mathf.CeilToInt(WidthPx / (float)chunkSizePx);
         int rows = Mathf.CeilToInt(HeightPx / (float)chunkSizePx);
         chunks = new TerrainChunk[columns, rows];
@@ -590,11 +586,8 @@ public class TerrainManager : MonoBehaviour
                 int pixelY = y * chunkSizePx;
                 int width = Mathf.Min(chunkSizePx, WidthPx - pixelX);
                 int height = Mathf.Min(chunkSizePx, HeightPx - pixelY);
-
-                GameObject chunkObject = new GameObject("TerrainChunk_" + x + "_" + y);
+                GameObject chunkObject = new GameObject($"TerrainChunk_{x}_{y}");
                 chunkObject.transform.SetParent(chunkRoot, false);
-                chunkObject.transform.localPosition = Vector3.zero;
-
                 TerrainChunk chunk = chunkObject.AddComponent<TerrainChunk>();
                 chunk.Initialize(
                     this,
@@ -609,23 +602,39 @@ public class TerrainManager : MonoBehaviour
 
     private void ClearChunkChildren()
     {
+        if (chunkRoot == null)
+        {
+            return;
+        }
+
         for (int i = chunkRoot.childCount - 1; i >= 0; i--)
         {
             Transform child = chunkRoot.GetChild(i);
-            if (Application.isPlaying)
-            {
-                Destroy(child.gameObject);
-            }
-            else
-            {
-                DestroyImmediate(child.gameObject);
-            }
+            if (Application.isPlaying) Destroy(child.gameObject);
+            else DestroyImmediate(child.gameObject);
         }
     }
 
-    private void MarkDirtyPixel(int x, int y)
+    private void MarkDirtyPixelAndNeighbors(int x, int y)
     {
-        if (chunks == null || chunks.Length == 0)
+        MarkDirtyChunkAtPixel(x, y);
+        int localX = ((x % chunkSizePx) + chunkSizePx) % chunkSizePx;
+        int localY = ((y % chunkSizePx) + chunkSizePx) % chunkSizePx;
+        int margin = collisionCellSizePx;
+
+        if (localX < margin) MarkDirtyChunkAtPixel(x - margin, y);
+        if (localX >= chunkSizePx - margin) MarkDirtyChunkAtPixel(x + margin, y);
+        if (localY < margin) MarkDirtyChunkAtPixel(x, y - margin);
+        if (localY >= chunkSizePx - margin) MarkDirtyChunkAtPixel(x, y + margin);
+        if (localX < margin && localY < margin) MarkDirtyChunkAtPixel(x - margin, y - margin);
+        if (localX < margin && localY >= chunkSizePx - margin) MarkDirtyChunkAtPixel(x - margin, y + margin);
+        if (localX >= chunkSizePx - margin && localY < margin) MarkDirtyChunkAtPixel(x + margin, y - margin);
+        if (localX >= chunkSizePx - margin && localY >= chunkSizePx - margin) MarkDirtyChunkAtPixel(x + margin, y + margin);
+    }
+
+    private void MarkDirtyChunkAtPixel(int x, int y)
+    {
+        if (chunks == null || chunks.Length == 0 || x < 0 || y < 0 || x >= WidthPx || y >= HeightPx)
         {
             return;
         }
@@ -633,7 +642,6 @@ public class TerrainManager : MonoBehaviour
         int chunkX = Mathf.Clamp(x / chunkSizePx, 0, chunks.GetLength(0) - 1);
         int chunkY = Mathf.Clamp(y / chunkSizePx, 0, chunks.GetLength(1) - 1);
         TerrainChunk chunk = chunks[chunkX, chunkY];
-
         if (chunk != null)
         {
             dirtyChunks.Add(chunk);
@@ -642,54 +650,41 @@ public class TerrainManager : MonoBehaviour
 
     private bool EnsureInitialized()
     {
-        if (!initialized && sourceTexture != null)
+        if (!initialized && visualSourceTexture != null)
         {
             InitializeTerrain();
         }
 
-        return initialized && runtimeTexture != null && solidMask != null && terrainTypeMask != null;
+        return initialized && runtimeVisualTexture != null && solidMask != null && terrainTypeMask != null;
+    }
+
+    private static int NormalizeCollisionCellSize(int value)
+    {
+        return value <= 4 ? 4 : 8;
     }
 
     private void OnValidate()
     {
         pixelsPerUnit = Mathf.Max(1, pixelsPerUnit);
         chunkSizePx = Mathf.Max(1, chunkSizePx);
-        collisionCellSizePx = Mathf.Max(1, collisionCellSizePx);
+        collisionCellSizePx = NormalizeCollisionCellSize(collisionCellSizePx);
         collisionSolidRatioThreshold = Mathf.Clamp01(collisionSolidRatioThreshold);
+        maskAlphaThreshold = Mathf.Clamp01(maskAlphaThreshold);
     }
 
     private void OnDrawGizmosSelected()
     {
-        if (!drawChunkGizmos)
+        if (!drawChunkGizmos || WidthPx <= 0 || HeightPx <= 0)
         {
             return;
         }
 
-        int width = WidthPx;
-        int height = HeightPx;
-        if (width <= 0 || height <= 0)
-        {
-            return;
-        }
-
-        float worldWidth = width / (float)PixelsPerUnit;
-        float worldHeight = height / (float)PixelsPerUnit;
+        float worldWidth = WidthPx / (float)PixelsPerUnit;
+        float worldHeight = HeightPx / (float)PixelsPerUnit;
         Vector3 origin = new Vector3(terrainOriginWorld.x, terrainOriginWorld.y, 0f);
-
         Gizmos.color = Color.yellow;
-        Gizmos.DrawWireCube(origin + new Vector3(worldWidth * 0.5f, worldHeight * 0.5f, 0f), new Vector3(worldWidth, worldHeight, 0f));
-
-        Gizmos.color = new Color(0f, 1f, 1f, 0.35f);
-        float chunkWorldSize = chunkSizePx / (float)PixelsPerUnit;
-
-        for (float x = 0f; x <= worldWidth + 0.001f; x += chunkWorldSize)
-        {
-            Gizmos.DrawLine(origin + new Vector3(x, 0f, 0f), origin + new Vector3(x, worldHeight, 0f));
-        }
-
-        for (float y = 0f; y <= worldHeight + 0.001f; y += chunkWorldSize)
-        {
-            Gizmos.DrawLine(origin + new Vector3(0f, y, 0f), origin + new Vector3(worldWidth, y, 0f));
-        }
+        Gizmos.DrawWireCube(
+            origin + new Vector3(worldWidth * 0.5f, worldHeight * 0.5f, 0f),
+            new Vector3(worldWidth, worldHeight, 0f));
     }
 }

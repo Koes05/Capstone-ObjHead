@@ -27,6 +27,7 @@ public class AimController : MonoBehaviour
     [SerializeField] private int visualSortingOrder = 25;
 
     private TurnCharacterController turnCharacter;
+    private CharacterVisual characterVisual;
     private int sideSign = 1;
     private float chargePower;
     private Transform targetingRoot;
@@ -51,7 +52,9 @@ public class AimController : MonoBehaviour
     private void Awake()
     {
         turnCharacter = GetComponent<TurnCharacterController>();
+        characterVisual = GetComponent<CharacterVisual>();
         sideSign = startsFacingRight ? 1 : -1;
+        characterVisual?.SetFacingRight(sideSign > 0);
         LoadDefaultSpritesInEditor();
         BuildVisuals();
         SetChargePower(0f);
@@ -60,7 +63,6 @@ public class AimController : MonoBehaviour
     private void Update()
     {
         bool visible = turnCharacter != null && turnCharacter.HasControl;
-
         if (visible)
         {
             ReadAimInput();
@@ -75,8 +77,19 @@ public class AimController : MonoBehaviour
         UpdateChargeMask();
     }
 
+    public void ConfirmFacingFromAim()
+    {
+        float x = AimDirection.x;
+        if (Mathf.Abs(x) > 0.001f)
+        {
+            sideSign = x >= 0f ? 1 : -1;
+            characterVisual?.SetFacingRight(sideSign > 0);
+        }
+    }
+
     private void ReadAimInput()
     {
+        float verticalInput = 0f;
 #if ENABLE_INPUT_SYSTEM
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null)
@@ -84,51 +97,36 @@ public class AimController : MonoBehaviour
             return;
         }
 
-        if (keyboard.leftArrowKey.wasPressedThisFrame || keyboard.leftArrowKey.isPressed)
+        if (keyboard.leftArrowKey.isPressed)
         {
             sideSign = -1;
+            characterVisual?.SetFacingRight(false);
         }
 
-        if (keyboard.rightArrowKey.wasPressedThisFrame || keyboard.rightArrowKey.isPressed)
+        if (keyboard.rightArrowKey.isPressed)
         {
             sideSign = 1;
+            characterVisual?.SetFacingRight(true);
         }
 
-        float verticalInput = 0f;
-
-        if (keyboard.upArrowKey.isPressed)
-        {
-            verticalInput += 1f;
-        }
-
-        if (keyboard.downArrowKey.isPressed)
-        {
-            verticalInput -= 1f;
-        }
+        if (keyboard.upArrowKey.isPressed) verticalInput += 1f;
+        if (keyboard.downArrowKey.isPressed) verticalInput -= 1f;
 #else
-        if (Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKey(KeyCode.LeftArrow))
+        if (Input.GetKey(KeyCode.LeftArrow))
         {
             sideSign = -1;
+            characterVisual?.SetFacingRight(false);
         }
 
-        if (Input.GetKeyDown(KeyCode.RightArrow) || Input.GetKey(KeyCode.RightArrow))
+        if (Input.GetKey(KeyCode.RightArrow))
         {
             sideSign = 1;
+            characterVisual?.SetFacingRight(true);
         }
 
-        float verticalInput = 0f;
-
-        if (Input.GetKey(KeyCode.UpArrow))
-        {
-            verticalInput += 1f;
-        }
-
-        if (Input.GetKey(KeyCode.DownArrow))
-        {
-            verticalInput -= 1f;
-        }
+        if (Input.GetKey(KeyCode.UpArrow)) verticalInput += 1f;
+        if (Input.GetKey(KeyCode.DownArrow)) verticalInput -= 1f;
 #endif
-
         sideAngleDegrees = Mathf.Clamp(sideAngleDegrees + verticalInput * rotateSpeedDegrees * Time.deltaTime, 0f, 180f);
     }
 
@@ -136,7 +134,6 @@ public class AimController : MonoBehaviour
     {
         targetingRoot = new GameObject("TargetingVisual").transform;
         targetingRoot.SetParent(transform, false);
-
         targetingImage = new GameObject("TargetingImage").transform;
         targetingImage.SetParent(targetingRoot, false);
         targetingRenderer = targetingImage.gameObject.AddComponent<SpriteRenderer>();
@@ -145,7 +142,6 @@ public class AimController : MonoBehaviour
 
         chargingRoot = new GameObject("ChargingVisual").transform;
         chargingRoot.SetParent(transform, false);
-
         chargingImage = new GameObject("ChargingImage").transform;
         chargingImage.SetParent(chargingRoot, false);
         chargingRenderer = chargingImage.gameObject.AddComponent<SpriteRenderer>();
@@ -170,14 +166,10 @@ public class AimController : MonoBehaviour
         }
 
         Vector2 direction = AimDirection;
-        Vector2 targetPosition = TargetPosition;
-        Vector2 chargingPosition = ChargingPosition;
         float rotation = WorldAngleDegrees - 90f;
-
         targetingRoot.gameObject.SetActive(visible);
-        targetingRoot.position = targetPosition;
+        targetingRoot.position = TargetPosition;
         targetingRoot.rotation = Quaternion.Euler(0f, 0f, rotation);
-
         if (targetingRenderer != null)
         {
             targetingRenderer.sprite = targetingSprite;
@@ -187,9 +179,8 @@ public class AimController : MonoBehaviour
 
         bool showCharging = visible && chargePower > 0.001f;
         chargingRoot.gameObject.SetActive(showCharging);
-        chargingRoot.position = chargingPosition + direction * 0.08f;
+        chargingRoot.position = ChargingPosition + direction * 0.08f;
         chargingRoot.rotation = Quaternion.Euler(0f, 0f, rotation);
-
         if (chargingRenderer != null)
         {
             chargingRenderer.sprite = chargingSprite;
@@ -212,7 +203,6 @@ public class AimController : MonoBehaviour
         float height = Mathf.Max(0.05f, bounds.size.y * chargingScale);
         float fillHeight = Mathf.Max(0.01f, height * Mathf.Clamp01(chargePower));
         float bottom = -height * 0.5f;
-
         chargingMaskTransform.localPosition = new Vector3(0f, bottom + fillHeight * 0.5f, 0f);
         chargingMaskTransform.localRotation = Quaternion.identity;
         chargingMaskTransform.localScale = new Vector3(width, fillHeight, 1f);
@@ -220,12 +210,7 @@ public class AimController : MonoBehaviour
 
     private static Vector3 GetCenteredOffset(Sprite sprite, float scale)
     {
-        if (sprite == null)
-        {
-            return Vector3.zero;
-        }
-
-        return -sprite.bounds.center * scale;
+        return sprite != null ? -sprite.bounds.center * scale : Vector3.zero;
     }
 
     private static Vector2 DirectionFromAngle(float degrees)
@@ -255,12 +240,12 @@ public class AimController : MonoBehaviour
 #if UNITY_EDITOR
         if (targetingSprite == null)
         {
-            targetingSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/서준호 이미지/타게팅.png");
+            targetingSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/Resources/Sprites/UI/targeting.png");
         }
 
         if (chargingSprite == null)
         {
-            chargingSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/서준호 이미지/차징.png");
+            chargingSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/Resources/Sprites/UI/charging.png");
         }
 #endif
     }

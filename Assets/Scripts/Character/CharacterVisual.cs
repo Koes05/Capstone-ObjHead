@@ -29,10 +29,12 @@ public class CharacterVisual : MonoBehaviour
     private Sprite[,] headSprites;
     private Coroutine temporaryStateRoutine;
     private bool isDead;
+    private bool isFacingRight = true;
 
     public ObjectHeadCharacterKind CharacterKind => characterKind;
     public int SelectedSkillIndex => selectedSkillIndex;
     public Sprite CurrentHeadSprite => headRenderer != null ? headRenderer.sprite : null;
+    public bool IsFacingRight => isFacingRight;
 
     private void Awake()
     {
@@ -46,7 +48,6 @@ public class CharacterVisual : MonoBehaviour
         bodyScale = Mathf.Max(0.01f, bodyScale);
         headScale = Mathf.Max(0.01f, headScale);
         selectedSkillIndex = Mathf.Clamp(selectedSkillIndex, 0, 2);
-
         if (bodyRenderer != null || headRenderer != null)
         {
             ApplyVisualState();
@@ -101,9 +102,8 @@ public class CharacterVisual : MonoBehaviour
 
     public void SetFacingRight(bool facingRight)
     {
-        Vector3 scale = transform.localScale;
-        scale.x = Mathf.Abs(scale.x) * (facingRight ? 1f : -1f);
-        transform.localScale = scale;
+        isFacingRight = facingRight;
+        ApplyFacing();
     }
 
     private IEnumerator TemporaryBodyState(Sprite bodySprite, bool showHead, Color color, float seconds)
@@ -111,7 +111,6 @@ public class CharacterVisual : MonoBehaviour
         SetBodySprite(bodySprite);
         SetHeadVisible(showHead);
         SetRendererColor(color);
-
         yield return new WaitForSeconds(Mathf.Max(0.01f, seconds));
 
         if (!isDead)
@@ -137,6 +136,7 @@ public class CharacterVisual : MonoBehaviour
 
         bodyRenderer = GetOrCreateChildRenderer("BodyRenderer", bodySortingOrder);
         headRenderer = GetOrCreateChildRenderer("HeadRenderer", headSortingOrder);
+        ApplyFacing();
     }
 
     private SpriteRenderer GetOrCreateChildRenderer(string childName, int sortingOrder)
@@ -191,17 +191,29 @@ public class CharacterVisual : MonoBehaviour
         headRenderer.transform.localScale = Vector3.one * headScale;
         bodyRenderer.sortingOrder = bodySortingOrder;
         headRenderer.sortingOrder = headSortingOrder;
+        ApplyFacing();
         SetHeadVisible(true);
+    }
+
+    private void ApplyFacing()
+    {
+        bool flip = !isFacingRight;
+        if (bodyRenderer != null)
+        {
+            bodyRenderer.flipX = flip;
+        }
+
+        if (headRenderer != null)
+        {
+            headRenderer.flipX = flip;
+        }
     }
 
     private Sprite GetSelectedHeadSprite()
     {
-        if (headSprites == null)
-        {
-            return null;
-        }
-
-        return headSprites[(int)characterKind, Mathf.Clamp(selectedSkillIndex, 0, 2)];
+        return headSprites != null
+            ? headSprites[(int)characterKind, Mathf.Clamp(selectedSkillIndex, 0, 2)]
+            : null;
     }
 
     private void SetBodySprite(Sprite sprite)

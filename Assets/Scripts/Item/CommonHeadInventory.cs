@@ -5,9 +5,11 @@ using UnityEngine;
 public class CommonHeadInventory : MonoBehaviour
 {
     private const int SlotCount = 3;
+    [SerializeField, Min(1)] private int playerIndex = 1;
     [SerializeField] private CommonHeadType[] slots = new CommonHeadType[SlotCount];
 
     public event Action InventoryChanged;
+    public int PlayerIndex => playerIndex;
 
     public int Count
     {
@@ -30,6 +32,13 @@ public class CommonHeadInventory : MonoBehaviour
     {
         EnsureSlots();
         return slotIndex >= 0 && slotIndex < SlotCount ? slots[slotIndex] : CommonHeadType.None;
+    }
+
+    public void ConfigurePlayer(int ownerPlayerIndex)
+    {
+        playerIndex = Mathf.Max(1, ownerPlayerIndex);
+        gameObject.name = $"P{playerIndex}_CommonHeadInventory";
+        EnsureSlots();
     }
 
     public bool TryAdd(CommonHeadType type, out int slotIndex)
