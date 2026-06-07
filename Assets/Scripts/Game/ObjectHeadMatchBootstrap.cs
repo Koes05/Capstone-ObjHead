@@ -1,5 +1,9 @@
 ﻿using System.Collections.Generic;
+using System;
+using System.Reflection;
 using UnityEngine;
+using UnityEngine.Serialization;
+using Object = UnityEngine.Object;
 
 public class ObjectHeadMatchBootstrap : MonoBehaviour
 {
@@ -13,7 +17,9 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
     [SerializeField] private int chunkSizePx = 64;
     [SerializeField] private int collisionCellSizePx = 4;
     [SerializeField, Range(1f, 2.5f)] private float mapWidthMultiplier = 1.5f;
-    [SerializeField] private int deterministicSpawnSeed = 6974;
+    [SerializeField] private bool useFixedTestSpawnSeed;
+    [FormerlySerializedAs("deterministicSpawnSeed")]
+    [SerializeField] private int fixedTestSpawnSeed = 6974;
     [SerializeField] private int commonHeadSpawnSeed = 6975;
     [SerializeField] private bool characterSpritesFaceRightByDefault = false;
     [SerializeField, Min(0.1f)] private float characterMoveSpeed = 3.5f;
@@ -28,6 +34,8 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
     private TurnManager turnManager;
     private Transform mapRoot;
     private bool built;
+
+    public static int CurrentMatchSeed { get; private set; } = 6974;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void AutoCreateForPlayableScene()
@@ -239,11 +247,114 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
 
     private int ResolveCharacterSpawnSeed()
     {
-        int seed = deterministicSpawnSeed != 0 ? deterministicSpawnSeed : 6974;
-        Debug.Log(
-            $"GameStartData.characterSpawnSeed is unavailable in this project; " +
-            $"using inspector test seed {seed} for deterministic character spawning.");
+        string source;
+        int seed;
+        if (TryGetGameStartDataSeed(out int externalSeed))
+        {
+            seed = externalSeed;
+            source = "GameStartData";
+        }
+        else if (useFixedTestSpawnSeed)
+        {
+            seed = fixedTestSpawnSeed != 0 ? fixedTestSpawnSeed : 6974;
+            source = "FixedTest";
+        }
+        else
+        {
+            int entropy = unchecked(Environment.TickCount ^ (int)DateTime.UtcNow.Ticks);
+            seed = new System.Random(entropy).Next(1, int.MaxValue);
+            source = "RandomTest";
+        }
+
+        CurrentMatchSeed = seed;
+        Debug.Log($"Character spawn seed: {seed}\nSource: {source}");
         return seed;
+    }
+
+    private static bool TryGetGameStartDataSeed(out int seed)
+    {
+        seed = 0;
+        Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+        for (int assemblyIndex = 0; assemblyIndex < assemblies.Length; assemblyIndex++)
+        {
+            Type type = assemblies[assemblyIndex].GetType("GameStartData");
+            if (type == null)
+            {
+                continue;
+            }
+
+            object instance = null;
+            PropertyInfo instanceProperty = type.GetProperty(
+                "Instance",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (instanceProperty != null)
+            {
+                instance = instanceProperty.GetValue(null);
+            }
+
+            if (TryReadSeedMember(type, instance, "characterSpawnSeed", out seed) ||
+                TryReadSeedMember(type, instance, "CharacterSpawnSeed", out seed))
+            {
+                return seed != 0;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryReadSeedMember(Type type, object instance, string memberName, out int seed)
+    {
+        seed = 0;
+        const BindingFlags flags =
+            BindingFlags.Public |
+            BindingFlags.NonPublic |
+            BindingFlags.Static |
+            BindingFlags.Instance;
+        FieldInfo field = type.GetField(memberName, flags);
+        if (field != null)
+        {
+            if (!field.IsStatic && instance == null)
+            {
+                return false;
+            }
+
+            object value = field.GetValue(field.IsStatic ? null : instance);
+            return TryConvertSeed(value, out seed);
+        }
+
+        PropertyInfo property = type.GetProperty(memberName, flags);
+        if (property != null && property.GetIndexParameters().Length == 0)
+        {
+            MethodInfo getter = property.GetGetMethod(true);
+            if (getter == null || (!getter.IsStatic && instance == null))
+            {
+                return false;
+            }
+
+            object value = property.GetValue(getter != null && getter.IsStatic ? null : instance);
+            return TryConvertSeed(value, out seed);
+        }
+
+        return false;
+    }
+
+    private static bool TryConvertSeed(object value, out int seed)
+    {
+        seed = 0;
+        if (value == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            seed = Convert.ToInt32(value);
+            return seed != 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private TurnCharacterController[] SpawnDefaultTeams(TerrainManager manager)

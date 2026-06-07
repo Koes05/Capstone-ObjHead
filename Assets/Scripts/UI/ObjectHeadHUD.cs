@@ -83,6 +83,10 @@ public class ObjectHeadHUD : MonoBehaviour
         {
             GUILayout.Label($"Power: {(power.CurrentPower * 100f):0}%", labelStyle);
             DrawHorizontalMeter(power.CurrentPower, new Color(1f, 0.85f, 0.2f, 0.95f), 348f, 8f);
+            if (power.IsCharging)
+            {
+                GUILayout.Label("C : 차징 취소", selectedStyle);
+            }
         }
     }
 

@@ -11,9 +11,11 @@ public class PowerChargeController : MonoBehaviour
 
     private TurnCharacterController turnCharacter;
     private AimController aimController;
+    private CharacterVisual characterVisual;
     private TurnManager turnManager;
     private bool isCharging;
     private bool hasReleasedPower;
+    private bool suppressReleaseFireUntilSpaceUp;
     private float currentPower;
     private float releasedPower;
 
@@ -24,6 +26,7 @@ public class PowerChargeController : MonoBehaviour
     {
         turnCharacter = GetComponent<TurnCharacterController>();
         aimController = GetComponent<AimController>();
+        characterVisual = GetComponent<CharacterVisual>();
         turnManager = FindTurnManager();
     }
 
@@ -31,6 +34,7 @@ public class PowerChargeController : MonoBehaviour
     {
         ResetCharge();
         hasReleasedPower = false;
+        suppressReleaseFireUntilSpaceUp = false;
     }
 
     private void Update()
@@ -51,6 +55,25 @@ public class PowerChargeController : MonoBehaviour
 
         ReadChargeInput(out bool pressed, out bool held, out bool released);
 
+        if (suppressReleaseFireUntilSpaceUp)
+        {
+            if (!held)
+            {
+                suppressReleaseFireUntilSpaceUp = false;
+            }
+
+            ResetCharge();
+            return;
+        }
+
+        if (isCharging &&
+            turnManager.CurrentPhase == TurnPhase.Aiming &&
+            WasCancelPressed())
+        {
+            CancelChargeFromInput();
+            return;
+        }
+
         if (pressed)
         {
             isCharging = true;
@@ -61,12 +84,6 @@ public class PowerChargeController : MonoBehaviour
         {
             currentPower = Mathf.Clamp01(currentPower + Time.deltaTime / chargeSeconds);
             aimController?.SetChargePower(currentPower);
-
-            if (currentPower >= 1f)
-            {
-                ReleasePower(1f);
-                return;
-            }
         }
 
         if (isCharging && released)
@@ -105,6 +122,13 @@ public class PowerChargeController : MonoBehaviour
         ResetCharge();
     }
 
+    private void CancelChargeFromInput()
+    {
+        CancelCharge();
+        suppressReleaseFireUntilSpaceUp = true;
+        characterVisual?.RestoreAfterChargeCancel();
+    }
+
     private void ReleasePower(float power)
     {
         releasedPower = Mathf.Clamp01(power);
@@ -130,6 +154,16 @@ public class PowerChargeController : MonoBehaviour
         pressed = Input.GetKeyDown(KeyCode.Space);
         held = Input.GetKey(KeyCode.Space);
         released = Input.GetKeyUp(KeyCode.Space);
+#endif
+    }
+
+    private static bool WasCancelPressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        Keyboard keyboard = Keyboard.current;
+        return keyboard != null && keyboard.cKey.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.C);
 #endif
     }
 }

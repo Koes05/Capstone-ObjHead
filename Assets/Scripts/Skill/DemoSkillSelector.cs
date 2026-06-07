@@ -45,6 +45,16 @@ public struct ObjectHeadSkillSettings
     public float blinkIntervalSeconds;
     public Sprite blinkSpriteA;
     public Sprite blinkSpriteB;
+    public int skillId;
+    public int commonHeadTypeId;
+    public int terrainBurstCount;
+    public int terrainBurstStampRadiusPx;
+    public float terrainBurstIntervalSeconds;
+    public float terrainBurstSpreadWorld;
+    public float terrainBurstVerticalBiasWorld;
+    public float finalTerrainRadiusXWorld;
+    public float finalTerrainRadiusYWorld;
+    public float maxBuildHeightAboveSurfaceWorld;
 
     public static ObjectHeadSkillSettings CreateDefault(
         Sprite headSprite,
@@ -84,7 +94,17 @@ public struct ObjectHeadSkillSettings
             blinkSeconds = 0.45f,
             blinkIntervalSeconds = 0.08f,
             blinkSpriteA = null,
-            blinkSpriteB = null
+            blinkSpriteB = null,
+            skillId = 0,
+            commonHeadTypeId = 0,
+            terrainBurstCount = 0,
+            terrainBurstStampRadiusPx = 0,
+            terrainBurstIntervalSeconds = 0.06f,
+            terrainBurstSpreadWorld = 1f,
+            terrainBurstVerticalBiasWorld = 0.25f,
+            finalTerrainRadiusXWorld = 1f,
+            finalTerrainRadiusYWorld = 0.8f,
+            maxBuildHeightAboveSurfaceWorld = 5f
         };
     }
 }
@@ -96,6 +116,15 @@ public class DemoSkillSelector : MonoBehaviour
     [SerializeField] private ObjectHeadCharacterKind characterKind = ObjectHeadCharacterKind.Bulb;
     [SerializeField, Range(0, 2)] private int selectedSkillIndex;
     [SerializeField] private bool allowKeyboardSelection = true;
+
+    [Header("Seed Terrain Growth")]
+    [SerializeField, Min(1)] private int seedTerrainBurstCount = 12;
+    [SerializeField, Min(1)] private int seedTerrainBurstStampRadiusPx = 9;
+    [SerializeField, Min(0.01f)] private float seedTerrainBurstIntervalSeconds = 0.055f;
+    [SerializeField, Min(0.1f)] private float seedTerrainRadiusXWorld = 1.2f;
+    [SerializeField, Min(0.5f)] private float seedTerrainRadiusYWorld = 0.95f;
+    [SerializeField, Min(0.5f)] private float minimumCreatedTerrainRadiusYWorld = 0.5f;
+    [SerializeField, Min(0.5f)] private float maxBuildHeightAboveSurfaceWorld = 5f;
 
     private readonly int[] remainingCooldowns = new int[3];
     private CharacterVisual characterVisual;
@@ -203,6 +232,7 @@ public class DemoSkillSelector : MonoBehaviour
                 break;
         }
 
+        settings.skillId = ((int)characterKind + 1) * 10 + selectedSkillIndex + 1;
         settings.headSprite = headSprite;
         return settings;
     }
@@ -272,6 +302,16 @@ public class DemoSkillSelector : MonoBehaviour
             settings.maxDamage = 5;
             settings.explosionRadiusWorld = 0.48f;
             settings.terrainRadiusPx = 18;
+            settings.terrainBurstCount = seedTerrainBurstCount;
+            settings.terrainBurstStampRadiusPx = seedTerrainBurstStampRadiusPx;
+            settings.terrainBurstIntervalSeconds = seedTerrainBurstIntervalSeconds;
+            settings.terrainBurstSpreadWorld = seedTerrainRadiusXWorld;
+            settings.terrainBurstVerticalBiasWorld = 0.3f;
+            settings.finalTerrainRadiusXWorld = seedTerrainRadiusXWorld;
+            settings.finalTerrainRadiusYWorld = Mathf.Max(
+                minimumCreatedTerrainRadiusYWorld,
+                seedTerrainRadiusYWorld);
+            settings.maxBuildHeightAboveSurfaceWorld = maxBuildHeightAboveSurfaceWorld;
             return;
         }
 
@@ -280,8 +320,8 @@ public class DemoSkillSelector : MonoBehaviour
             settings.effectType = SkillEffectType.CreateTerrainBridge;
             settings.maxDamage = 3;
             settings.explosionRadiusWorld = 0.38f;
-            settings.bridgeLengthWorld = 4.8f;
-            settings.bridgeThicknessPx = 8;
+            settings.bridgeLengthWorld = 6.5f;
+            settings.bridgeThicknessPx = 9;
             return;
         }
 
@@ -406,5 +446,38 @@ public class DemoSkillSelector : MonoBehaviour
 #else
         return Object.FindObjectOfType<TurnManager>();
 #endif
+    }
+}
+
+public static class TerrainGrowthSeedUtility
+{
+    public static int Build(
+        CharacterCombat owner,
+        TurnManager turnManager,
+        int skillId,
+        int commonHeadTypeId,
+        Vector2 worldPosition)
+    {
+        ObjectHeadTeamMember member = owner != null
+            ? owner.GetComponent<ObjectHeadTeamMember>()
+            : null;
+        int playerIndex = member != null ? member.PlayerIndex : 0;
+        int slotIndex = member != null ? member.TeamSlotIndex : 0;
+        int quantizedX = Mathf.RoundToInt(worldPosition.x * 16f);
+        int quantizedY = Mathf.RoundToInt(worldPosition.y * 16f);
+
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + ObjectHeadMatchBootstrap.CurrentMatchSeed;
+            hash = hash * 31 + (turnManager != null ? turnManager.TurnSerial : 0);
+            hash = hash * 31 + playerIndex;
+            hash = hash * 31 + slotIndex;
+            hash = hash * 31 + skillId;
+            hash = hash * 31 + commonHeadTypeId;
+            hash = hash * 31 + quantizedX;
+            hash = hash * 31 + quantizedY;
+            return hash;
+        }
     }
 }

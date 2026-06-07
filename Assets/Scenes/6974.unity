@@ -473,10 +473,12 @@ MonoBehaviour:
   aimRadius: 2.2
   chargingRadius: 1.45
   rotateSpeedDegrees: 120
-  sideAngleDegrees: 90
+  localAimAngleDegrees: 0
   startsFacingRight: 1
   targetingScale: 0.18
   chargingScale: 0.16
+  targetingSpriteAngleOffset: 0
+  chargingSpriteAngleOffset: 90
   visualSortingOrder: 25
 --- !u!114 &100200007
 MonoBehaviour:
@@ -787,10 +789,12 @@ MonoBehaviour:
   aimRadius: 2.2
   chargingRadius: 1.45
   rotateSpeedDegrees: 120
-  sideAngleDegrees: 90
+  localAimAngleDegrees: 0
   startsFacingRight: 0
   targetingScale: 0.18
   chargingScale: 0.16
+  targetingSpriteAngleOffset: 0
+  chargingSpriteAngleOffset: 90
   visualSortingOrder: 25
 --- !u!114 &100300007
 MonoBehaviour:
@@ -1637,7 +1641,8 @@ MonoBehaviour:
   chunkSizePx: 64
   collisionCellSizePx: 4
   mapWidthMultiplier: 1.5
-  deterministicSpawnSeed: 6974
+  useFixedTestSpawnSeed: 0
+  fixedTestSpawnSeed: 6974
   commonHeadSpawnSeed: 6975
   characterSpritesFaceRightByDefault: 0
   characterMoveSpeed: 3.5

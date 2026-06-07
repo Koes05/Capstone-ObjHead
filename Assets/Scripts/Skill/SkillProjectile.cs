@@ -28,6 +28,7 @@ public class SkillProjectile : MonoBehaviour
     private TerrainManager terrain;
     private Vector2 previousPosition;
     private bool hasPreviousPosition;
+    private Vector2 launchDirection;
 
     public bool IsFlying => isFlying && !isCompleted;
     public event Action Resolved;
@@ -56,6 +57,7 @@ public class SkillProjectile : MonoBehaviour
         explosionFadeSeconds = fadeSeconds;
         remainingLifetime = lifetime;
         lastVelocity = velocity;
+        launchDirection = velocity.sqrMagnitude > 0.0001f ? velocity.normalized : Vector2.right;
         previousPosition = transform.position;
         hasPreviousPosition = true;
         terrain = FindTerrainManager();
@@ -236,6 +238,10 @@ public class SkillProjectile : MonoBehaviour
         {
             yield return ApplyChainExplosionRoutine(impactPoint);
         }
+        else if (skillSettings.effectType == SkillEffectType.CreateTerrainCircle)
+        {
+            yield return CreateTerrainBurstRoutine(impactPoint);
+        }
         else
         {
             ApplySkillEffect(impactPoint);
@@ -251,8 +257,6 @@ public class SkillProjectile : MonoBehaviour
         switch (skillSettings.effectType)
         {
             case SkillEffectType.CreateTerrainCircle:
-                CreateTerrainCircle(impactPoint);
-                ApplyDamage(impactPoint, fallbackHorizontalSign);
                 break;
             case SkillEffectType.CreateTerrainBridge:
                 CreateTerrainBridge(impactPoint);
@@ -450,6 +454,143 @@ public class SkillProjectile : MonoBehaviour
         terrainManager.CreateCircle(impactPoint, radiusPx, TerrainType.Created, FindBlockedCharacterColliders());
     }
 
+    private IEnumerator CreateTerrainBurstRoutine(Vector2 impactPoint)
+    {
+        TerrainManager terrainManager = GetTerrain();
+        if (terrainManager == null)
+        {
+            yield break;
+        }
+
+        int count = skillSettings.terrainBurstCount > 0
+            ? skillSettings.terrainBurstCount
+            : 10;
+        int stampRadiusPx = skillSettings.terrainBurstStampRadiusPx > 0
+            ? skillSettings.terrainBurstStampRadiusPx
+            : Mathf.Max(6, skillSettings.terrainRadiusPx / 2);
+        float interval = Mathf.Clamp(
+            skillSettings.terrainBurstIntervalSeconds,
+            0.04f,
+            0.09f);
+        float spreadX = Mathf.Max(
+            0.2f,
+            skillSettings.finalTerrainRadiusXWorld > 0f
+                ? skillSettings.finalTerrainRadiusXWorld
+                : skillSettings.terrainBurstSpreadWorld);
+        float spreadY = Mathf.Max(
+            0.5f,
+            skillSettings.finalTerrainRadiusYWorld > 0f
+                ? skillSettings.finalTerrainRadiusYWorld
+                : spreadX * 0.8f);
+        int seed = TerrainGrowthSeedUtility.Build(
+            owner,
+            turnManager,
+            skillSettings.skillId,
+            skillSettings.commonHeadTypeId,
+            impactPoint);
+        System.Random random = new System.Random(seed);
+        Bounds terrainBounds = terrainManager.GetTerrainBounds();
+        int clippedStamps = 0;
+        int stampsSinceRebuild = 0;
+        float lastRebuildTime = Time.time;
+
+        Debug.Log(
+            $"Terrain burst seed={seed}, count={count}, stampRadiusPx={stampRadiusPx}, " +
+            $"spread=({spreadX:0.##}, {spreadY:0.##}).");
+
+        for (int i = 0; i < count; i++)
+        {
+            Vector2 normalizedOffset = GetBurstPatternOffset(i, count, random);
+            Vector2 point = impactPoint + new Vector2(
+                normalizedOffset.x * spreadX,
+                Mathf.Max(-0.12f, normalizedOffset.y) * spreadY +
+                Mathf.Max(0f, skillSettings.terrainBurstVerticalBiasWorld));
+            point.y = Mathf.Min(
+                point.y,
+                impactPoint.y + Mathf.Max(0.5f, skillSettings.maxBuildHeightAboveSurfaceWorld));
+
+            if (!terrainBounds.Contains(point))
+            {
+                clippedStamps++;
+            }
+            else
+            {
+                Collider2D[] blocked = FindBlockedCharacterColliders();
+                if (terrainManager.CreateCircleDeferred(
+                    point,
+                    stampRadiusPx,
+                    TerrainType.Created,
+                    blocked))
+                {
+                    stampsSinceRebuild++;
+                    SpawnGrowthMarker(point);
+                }
+            }
+
+            if (stampsSinceRebuild >= 2 || Time.time - lastRebuildTime >= 0.1f)
+            {
+                terrainManager.FlushDeferredTerrainChanges();
+                stampsSinceRebuild = 0;
+                lastRebuildTime = Time.time;
+            }
+
+            if (i < count - 1)
+            {
+                yield return new WaitForSeconds(interval);
+            }
+        }
+
+        terrainManager.FlushDeferredTerrainChanges();
+        if (clippedStamps * 2 >= count)
+        {
+            Debug.LogWarning(
+                $"Terrain burst at {impactPoint} was heavily clipped by texture bounds " +
+                $"({clippedStamps}/{count} stamps).");
+        }
+
+        float fallbackHorizontalSign = Mathf.Abs(launchDirection.x) > 0.001f
+            ? Mathf.Sign(launchDirection.x)
+            : 0f;
+        ApplyDamage(impactPoint, fallbackHorizontalSign);
+    }
+
+    private static Vector2 GetBurstPatternOffset(int index, int count, System.Random random)
+    {
+        Vector2[] foundation =
+        {
+            Vector2.zero,
+            new Vector2(-0.55f, 0.05f),
+            new Vector2(0.55f, 0.05f),
+            new Vector2(0f, 0.5f),
+            new Vector2(-0.42f, 0.48f),
+            new Vector2(0.42f, 0.48f),
+            new Vector2(-0.75f, 0.28f),
+            new Vector2(0.75f, 0.28f)
+        };
+        if (index < foundation.Length)
+        {
+            return foundation[index];
+        }
+
+        float angle = (float)(random.NextDouble() * Mathf.PI);
+        float radius = Mathf.Lerp(0.15f, 0.88f, (float)random.NextDouble());
+        float x = Mathf.Cos(angle) * radius;
+        float y = Mathf.Sin(angle) * radius;
+        return new Vector2(x, y);
+    }
+
+    private void SpawnGrowthMarker(Vector2 point)
+    {
+        GameObject marker = new GameObject("TerrainGrowthMarker");
+        marker.transform.position = point;
+        SpriteRenderer renderer = marker.AddComponent<SpriteRenderer>();
+        renderer.sprite = GetCircleSprite();
+        renderer.color = new Color(0.35f, 1f, 0.35f, 0.65f);
+        renderer.sortingOrder = 39;
+        marker.transform.localScale = Vector3.one * 0.22f;
+        StartCoroutine(FadeAndDestroyMarker(marker, renderer));
+    }
+
     private void CreateTerrainBridge(Vector2 impactPoint)
     {
         TerrainManager terrainManager = GetTerrain();
@@ -458,7 +599,9 @@ public class SkillProjectile : MonoBehaviour
             return;
         }
 
-        Vector2 direction = GetHorizontalImpactDirection();
+        Vector2 direction = launchDirection.sqrMagnitude > 0.0001f
+            ? launchDirection.normalized
+            : Vector2.right;
         float length = Mathf.Max(0.5f, skillSettings.bridgeLengthWorld);
         int thicknessPx = Mathf.Max(1, skillSettings.bridgeThicknessPx);
         terrainManager.CreateBridge(impactPoint, direction, length, thicknessPx);

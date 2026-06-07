@@ -23,11 +23,17 @@ public class CommonHeadUseController : MonoBehaviour
 
     [Header("Terrain Head")]
     [SerializeField, Min(1)] private int createdTerrainRadiusPx = 14;
+    [SerializeField, Min(1)] private int terrainBurstCount = 8;
+    [SerializeField, Min(1)] private int terrainBurstStampRadiusPx = 8;
+    [SerializeField, Min(0.01f)] private float terrainBurstInterval = 0.065f;
+    [SerializeField, Min(0.1f)] private float terrainBurstSpreadWorld = 0.82f;
+    [SerializeField, Min(0.1f)] private float terrainBurstRadiusXWorld = 0.82f;
+    [SerializeField, Min(0.1f)] private float terrainBurstRadiusYWorld = 0.68f;
+    [SerializeField, Min(0.5f)] private float maxBuildHeightAboveSurfaceWorld = 5f;
 
     [Header("Jet Jump")]
     [SerializeField, Min(0.1f)] private float minJetJumpSpeed = 4f;
     [SerializeField, Min(0.1f)] private float maxJetJumpSpeed = 11f;
-    [SerializeField, Range(0f, 0.95f)] private float minUpwardDirection = 0.2f;
     [SerializeField, Min(0.1f)] private float mobilityResolveSeconds = 0.45f;
 
     private CommonHeadInventory inventory;
@@ -112,7 +118,6 @@ public class CommonHeadUseController : MonoBehaviour
         selectedType = CommonHeadType.None;
         selectedSprite = null;
         powerChargeController?.CancelCharge();
-        aimController?.SetUpperHemisphereOnly(false);
         if (!commonActionInProgress)
         {
             characterVisual?.RestoreUniqueHead();
@@ -173,7 +178,6 @@ public class CommonHeadUseController : MonoBehaviour
         }
 
         powerChargeController?.CancelCharge();
-        aimController?.SetUpperHemisphereOnly(type == CommonHeadType.Mobility, minUpwardDirection);
         characterVisual?.SetTemporaryCommonHead(selectedSprite);
         Debug.Log($"{name} selected {type} common head in slot {slotIndex + 6}.");
     }
@@ -206,7 +210,6 @@ public class CommonHeadUseController : MonoBehaviour
         selectedSprite = null;
         commonActionInProgress = true;
         powerChargeController?.CancelCharge();
-        aimController?.SetUpperHemisphereOnly(false);
         aimController?.ConfirmFacingFromAim();
         characterVisual?.PlayThrowPose(0.25f);
         characterVisual?.HideHeadForThrow();
@@ -266,8 +269,7 @@ public class CommonHeadUseController : MonoBehaviour
     {
         turnManager.NotifyResolving();
         Rigidbody2D body = GetComponent<Rigidbody2D>();
-        Vector2 aim = aimController != null ? aimController.AimDirection : Vector2.up;
-        Vector2 direction = new Vector2(aim.x, Mathf.Max(minUpwardDirection, aim.y)).normalized;
+        Vector2 direction = aimController != null ? aimController.EffectiveAimDirection : Vector2.up;
         float launchSpeed = Mathf.Lerp(minJetJumpSpeed, maxJetJumpSpeed, Mathf.Clamp01(normalizedPower));
 
         turnCharacter?.BeginJetJumpFallDamageImmunity();
@@ -308,6 +310,15 @@ public class CommonHeadUseController : MonoBehaviour
             0f);
         settings.effectType = SkillEffectType.CreateTerrainCircle;
         settings.terrainRadiusPx = createdTerrainRadiusPx;
+        settings.terrainBurstCount = terrainBurstCount;
+        settings.terrainBurstStampRadiusPx = terrainBurstStampRadiusPx;
+        settings.terrainBurstIntervalSeconds = terrainBurstInterval;
+        settings.terrainBurstSpreadWorld = terrainBurstSpreadWorld;
+        settings.finalTerrainRadiusXWorld = terrainBurstRadiusXWorld;
+        settings.finalTerrainRadiusYWorld = Mathf.Max(0.5f, terrainBurstRadiusYWorld);
+        settings.maxBuildHeightAboveSurfaceWorld = maxBuildHeightAboveSurfaceWorld;
+        settings.skillId = 102;
+        settings.commonHeadTypeId = (int)CommonHeadType.TerrainCreation;
         settings.projectileVisualDiameter = 0.58f;
         return settings;
     }

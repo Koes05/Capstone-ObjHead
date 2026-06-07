@@ -2,9 +2,6 @@ using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
 
 [DisallowMultipleComponent]
 public class AimController : MonoBehaviour
@@ -18,19 +15,19 @@ public class AimController : MonoBehaviour
     [SerializeField, Min(0.1f)] private float aimRadius = 2.2f;
     [SerializeField, Min(0.1f)] private float chargingRadius = 1.45f;
     [SerializeField, Min(1f)] private float rotateSpeedDegrees = 120f;
-    [SerializeField, Range(0f, 180f)] private float sideAngleDegrees = 90f;
+    [SerializeField, Range(-90f, 90f)] private float localAimAngleDegrees;
     [SerializeField] private bool startsFacingRight = true;
-    [SerializeField] private bool upperHemisphereOnly;
-    [SerializeField, Range(0f, 0.95f)] private float minimumUpwardDirection = 0.2f;
 
     [Header("Visual")]
     [SerializeField, Min(0.01f)] private float targetingScale = 0.18f;
     [SerializeField, Min(0.01f)] private float chargingScale = 0.16f;
+    [SerializeField] private float targetingSpriteAngleOffset;
+    [SerializeField] private float chargingSpriteAngleOffset = 90f;
     [SerializeField] private int visualSortingOrder = 25;
 
     private TurnCharacterController turnCharacter;
     private CharacterVisual characterVisual;
-    private int sideSign = 1;
+    private int facingSign = 1;
     private float chargePower;
     private Transform targetingRoot;
     private Transform targetingImage;
@@ -46,26 +43,51 @@ public class AimController : MonoBehaviour
 
     public float ChargePower => chargePower;
     public Vector2 AimOrigin => (Vector2)transform.position + originOffset;
-    public Vector2 AimDirection => GetConstrainedAimDirection();
-    public Vector2 TargetPosition => AimOrigin + AimDirection * aimRadius;
-    public Vector2 ChargingPosition => AimOrigin + AimDirection * chargingRadius;
-    public float WorldAngleDegrees => sideSign >= 0
-        ? Mathf.Lerp(-90f, 90f, sideAngleDegrees / 180f)
-        : Mathf.Lerp(270f, 90f, sideAngleDegrees / 180f);
+    public Vector2 AimDirection => EffectiveAimDirection;
+    public Vector2 EffectiveAimDirection
+    {
+        get
+        {
+            float radians = localAimAngleDegrees * Mathf.Deg2Rad;
+            return new Vector2(
+                Mathf.Cos(radians) * facingSign,
+                Mathf.Sin(radians)).normalized;
+        }
+    }
+    public Vector2 TargetPosition => AimOrigin + EffectiveAimDirection * aimRadius;
+    public Vector2 ChargingPosition => AimOrigin + EffectiveAimDirection * chargingRadius;
+    public int FacingSign => facingSign;
+    public float LocalAimAngleDegrees => localAimAngleDegrees;
+    public float DirectionAngleDegrees =>
+        Mathf.Atan2(EffectiveAimDirection.y, EffectiveAimDirection.x) * Mathf.Rad2Deg;
 
     private void Awake()
     {
         turnCharacter = GetComponent<TurnCharacterController>();
         characterVisual = GetComponent<CharacterVisual>();
-        sideSign = startsFacingRight ? 1 : -1;
-        characterVisual?.SetFacingRight(sideSign > 0);
+        facingSign = startsFacingRight ? 1 : -1;
+        if (characterVisual != null)
+        {
+            facingSign = characterVisual.IsFacingRight ? 1 : -1;
+            characterVisual.FacingChanged += HandleFacingChanged;
+        }
+
         LoadDefaultSprites();
         BuildVisuals();
         SetChargePower(0f);
     }
 
+    private void OnDestroy()
+    {
+        if (characterVisual != null)
+        {
+            characterVisual.FacingChanged -= HandleFacingChanged;
+        }
+    }
+
     private void Update()
     {
+        SyncFacingFromVisual();
         bool visible = turnCharacter != null && turnCharacter.HasControl;
         if (visible)
         {
@@ -83,18 +105,8 @@ public class AimController : MonoBehaviour
 
     public void ConfirmFacingFromAim()
     {
-        float x = AimDirection.x;
-        if (Mathf.Abs(x) > 0.001f)
-        {
-            sideSign = x >= 0f ? 1 : -1;
-            characterVisual?.SetFacingRight(sideSign > 0);
-        }
-    }
-
-    public void SetUpperHemisphereOnly(bool enabled, float minimumY = 0.2f)
-    {
-        upperHemisphereOnly = enabled;
-        minimumUpwardDirection = Mathf.Clamp(minimumY, 0f, 0.95f);
+        SyncFacingFromVisual();
+        characterVisual?.SetFacingRight(facingSign > 0);
     }
 
     private void ReadAimInput()
@@ -109,14 +121,12 @@ public class AimController : MonoBehaviour
 
         if (keyboard.leftArrowKey.isPressed)
         {
-            sideSign = -1;
-            characterVisual?.SetFacingRight(false);
+            SetFacingSign(-1);
         }
 
         if (keyboard.rightArrowKey.isPressed)
         {
-            sideSign = 1;
-            characterVisual?.SetFacingRight(true);
+            SetFacingSign(1);
         }
 
         if (keyboard.upArrowKey.isPressed) verticalInput += 1f;
@@ -124,20 +134,41 @@ public class AimController : MonoBehaviour
 #else
         if (Input.GetKey(KeyCode.LeftArrow))
         {
-            sideSign = -1;
-            characterVisual?.SetFacingRight(false);
+            SetFacingSign(-1);
         }
 
         if (Input.GetKey(KeyCode.RightArrow))
         {
-            sideSign = 1;
-            characterVisual?.SetFacingRight(true);
+            SetFacingSign(1);
         }
 
         if (Input.GetKey(KeyCode.UpArrow)) verticalInput += 1f;
         if (Input.GetKey(KeyCode.DownArrow)) verticalInput -= 1f;
 #endif
-        sideAngleDegrees = Mathf.Clamp(sideAngleDegrees + verticalInput * rotateSpeedDegrees * Time.deltaTime, 0f, 180f);
+        localAimAngleDegrees = Mathf.Clamp(
+            localAimAngleDegrees + verticalInput * rotateSpeedDegrees * Time.deltaTime,
+            -90f,
+            90f);
+    }
+
+    private void SetFacingSign(int sign)
+    {
+        facingSign = sign >= 0 ? 1 : -1;
+        characterVisual?.SetFacingRight(facingSign > 0);
+    }
+
+    private void SyncFacingFromVisual()
+    {
+        if (characterVisual != null)
+        {
+            facingSign = characterVisual.IsFacingRight ? 1 : -1;
+        }
+    }
+
+    private void HandleFacingChanged(bool facingRight)
+    {
+        facingSign = facingRight ? 1 : -1;
+        UpdateVisuals(turnCharacter != null && turnCharacter.HasControl);
     }
 
     private void BuildVisuals()
@@ -175,11 +206,15 @@ public class AimController : MonoBehaviour
             return;
         }
 
-        Vector2 direction = AimDirection;
-        float rotation = WorldAngleDegrees - 90f;
+        Vector2 direction = EffectiveAimDirection;
+        float directionAngle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
+
         targetingRoot.gameObject.SetActive(visible);
-        targetingRoot.position = TargetPosition;
-        targetingRoot.rotation = Quaternion.Euler(0f, 0f, rotation);
+        targetingRoot.position = AimOrigin + direction * aimRadius;
+        targetingRoot.rotation = Quaternion.Euler(
+            0f,
+            0f,
+            directionAngle + targetingSpriteAngleOffset);
         if (targetingRenderer != null)
         {
             targetingRenderer.sprite = targetingSprite;
@@ -189,8 +224,11 @@ public class AimController : MonoBehaviour
 
         bool showCharging = visible && chargePower > 0.001f;
         chargingRoot.gameObject.SetActive(showCharging);
-        chargingRoot.position = ChargingPosition + direction * 0.08f;
-        chargingRoot.rotation = Quaternion.Euler(0f, 0f, rotation);
+        chargingRoot.position = AimOrigin + direction * (chargingRadius + 0.08f);
+        chargingRoot.rotation = Quaternion.Euler(
+            0f,
+            0f,
+            directionAngle + chargingSpriteAngleOffset);
         if (chargingRenderer != null)
         {
             chargingRenderer.sprite = chargingSprite;
@@ -223,24 +261,6 @@ public class AimController : MonoBehaviour
         return sprite != null ? -sprite.bounds.center * scale : Vector3.zero;
     }
 
-    private static Vector2 DirectionFromAngle(float degrees)
-    {
-        float radians = degrees * Mathf.Deg2Rad;
-        return new Vector2(Mathf.Cos(radians), Mathf.Sin(radians)).normalized;
-    }
-
-    private Vector2 GetConstrainedAimDirection()
-    {
-        Vector2 direction = DirectionFromAngle(WorldAngleDegrees);
-        if (!upperHemisphereOnly)
-        {
-            return direction;
-        }
-
-        direction.y = Mathf.Max(minimumUpwardDirection, direction.y);
-        return direction.normalized;
-    }
-
     private static Sprite GetMaskSprite()
     {
         if (maskSprite != null)
@@ -252,7 +272,11 @@ public class AimController : MonoBehaviour
         texture.SetPixel(0, 0, Color.white);
         texture.Apply();
         texture.hideFlags = HideFlags.HideAndDontSave;
-        maskSprite = Sprite.Create(texture, new Rect(0f, 0f, 1f, 1f), new Vector2(0.5f, 0.5f), 1f);
+        maskSprite = Sprite.Create(
+            texture,
+            new Rect(0f, 0f, 1f, 1f),
+            new Vector2(0.5f, 0.5f),
+            1f);
         maskSprite.hideFlags = HideFlags.HideAndDontSave;
         return maskSprite;
     }
@@ -269,18 +293,6 @@ public class AimController : MonoBehaviour
             chargingSprite = Resources.Load<Sprite>("Sprites/UI/charging");
         }
 
-#if UNITY_EDITOR
-        if (targetingSprite == null)
-        {
-            targetingSprite = LoadFirstSpriteAtPath("Assets/서준호 이미지/타게팅.png");
-        }
-
-        if (chargingSprite == null)
-        {
-            chargingSprite = LoadFirstSpriteAtPath("Assets/서준호 이미지/차징.png");
-        }
-#endif
-
         if (targetingSprite == null)
         {
             targetingSprite = GetFallbackTargetingSprite();
@@ -291,22 +303,6 @@ public class AimController : MonoBehaviour
             chargingSprite = GetFallbackChargingSprite();
         }
     }
-
-#if UNITY_EDITOR
-    private static Sprite LoadFirstSpriteAtPath(string assetPath)
-    {
-        Object[] assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
-        for (int i = 0; i < assets.Length; i++)
-        {
-            if (assets[i] is Sprite sprite)
-            {
-                return sprite;
-            }
-        }
-
-        return null;
-    }
-#endif
 
     private static Sprite GetFallbackTargetingSprite()
     {
@@ -330,7 +326,9 @@ public class AimController : MonoBehaviour
                 bool ring = distance >= 40f && distance <= 47f;
                 bool horizontal = Mathf.Abs(offset.y) <= 3f && Mathf.Abs(offset.x) >= 30f;
                 bool vertical = Mathf.Abs(offset.x) <= 3f && Mathf.Abs(offset.y) >= 30f;
-                pixels[y * size + x] = ring || horizontal || vertical ? color : new Color32(0, 0, 0, 0);
+                pixels[y * size + x] = ring || horizontal || vertical
+                    ? color
+                    : new Color32(0, 0, 0, 0);
             }
         }
 
@@ -362,7 +360,10 @@ public class AimController : MonoBehaviour
         for (int y = 0; y < height; y++)
         {
             float t = y / (float)(height - 1);
-            Color color = Color.Lerp(new Color(1f, 0.18f, 0.1f, 1f), new Color(1f, 0.95f, 0.1f, 1f), t);
+            Color color = Color.Lerp(
+                new Color(1f, 0.18f, 0.1f, 1f),
+                new Color(1f, 0.95f, 0.1f, 1f),
+                t);
             float halfWidth = Mathf.Lerp(5f, width * 0.48f, t);
             for (int x = 0; x < width; x++)
             {

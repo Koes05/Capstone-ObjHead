@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using UnityEngine;
 
@@ -41,6 +42,7 @@ public class CharacterVisual : MonoBehaviour
     public Sprite UniqueHeadSprite => uniqueHeadSprite;
     public bool IsFacingRight => isFacingRight;
     public bool SpriteFacesRightByDefault => spriteFacesRightByDefault;
+    public event Action<bool> FacingChanged;
 
     private void Awake()
     {
@@ -118,6 +120,23 @@ public class CharacterVisual : MonoBehaviour
         SetHeadVisible(true);
     }
 
+    public void RestoreAfterChargeCancel()
+    {
+        if (temporaryStateRoutine != null)
+        {
+            StopCoroutine(temporaryStateRoutine);
+            temporaryStateRoutine = null;
+        }
+
+        if (!isDead)
+        {
+            SetBodySprite(bodyIdle);
+            SetHeadVisible(true);
+            SetRendererColor(Color.white);
+            RefreshHeadSprite();
+        }
+    }
+
     public void PlayThrowPose(float seconds)
     {
         if (temporaryStateRoutine != null)
@@ -153,8 +172,13 @@ public class CharacterVisual : MonoBehaviour
 
     public void SetFacingRight(bool facingRight)
     {
+        bool changed = isFacingRight != facingRight;
         isFacingRight = facingRight;
         ApplyFacing();
+        if (changed)
+        {
+            FacingChanged?.Invoke(isFacingRight);
+        }
     }
 
     private IEnumerator TemporaryBodyState(Sprite bodySprite, bool showHead, Color color, float seconds)

@@ -84,9 +84,10 @@ public class TerrainRandomSpawner : MonoBehaviour
                 }
 
                 Vector2 spawn;
+                bool usedFallback = false;
                 bool found = slot == 0
-                    ? TryFindTeamAnchor(character, playerIndex, regionMinX, regionMaxX, out spawn)
-                    : TryFindNearTeamAnchor(character, playerIndex, regionMinX, regionMaxX, out spawn);
+                    ? TryFindTeamAnchor(character, playerIndex, regionMinX, regionMaxX, out spawn, out usedFallback)
+                    : TryFindNearTeamAnchor(character, playerIndex, regionMinX, regionMaxX, out spawn, out usedFallback);
 
                 if (!found)
                 {
@@ -95,12 +96,17 @@ public class TerrainRandomSpawner : MonoBehaviour
                         playerIndex,
                         regionMinX,
                         regionMaxX,
-                        out spawn);
+                        out spawn,
+                        out usedFallback);
                 }
 
                 if (!found)
                 {
-                    Debug.LogError($"No safe terrain spawn found for {character.name}.");
+                    Debug.LogError(
+                        $"Character spawn failed for {character.name}. " +
+                        $"Region=({regionMinX:0.##}, {regionMaxX:0.##}), " +
+                        $"placed={placedCharacters.Count}, seed={deterministicSeed}. Character disabled.");
+                    character.gameObject.SetActive(false);
                     continue;
                 }
 
@@ -110,6 +116,13 @@ public class TerrainRandomSpawner : MonoBehaviour
                 {
                     teamAnchors[playerIndex] = spawn;
                 }
+
+                float anchorDistance = teamAnchors.TryGetValue(playerIndex, out Vector2 anchor)
+                    ? Vector2.Distance(spawn, anchor)
+                    : 0f;
+                Debug.Log(
+                    $"Spawned {character.name} at {spawn}; anchorDistance={anchorDistance:0.##}; " +
+                    $"fallback={usedFallback}; seed={deterministicSeed}.");
             }
 
             playerOrder++;
@@ -123,14 +136,15 @@ public class TerrainRandomSpawner : MonoBehaviour
         int playerIndex,
         float regionMinX,
         float regionMaxX,
-        out Vector2 spawn)
+        out Vector2 spawn,
+        out bool usedFallback)
     {
         TerrainCharacterSpawnRequest request = BuildRequest(
             character,
             playerIndex,
             regionMinX,
             regionMaxX);
-        return terrain.FindValidCharacterSpawn(request, random, out spawn);
+        return terrain.FindValidCharacterSpawn(request, random, out spawn, out usedFallback);
     }
 
     private bool TryFindNearTeamAnchor(
@@ -138,12 +152,14 @@ public class TerrainRandomSpawner : MonoBehaviour
         int playerIndex,
         float regionMinX,
         float regionMaxX,
-        out Vector2 spawn)
+        out Vector2 spawn,
+        out bool usedFallback)
     {
+        usedFallback = false;
         spawn = character.transform.position;
         if (!teamAnchors.TryGetValue(playerIndex, out Vector2 anchor))
         {
-            return TryFindTeamAnchor(character, playerIndex, regionMinX, regionMaxX, out spawn);
+            return TryFindTeamAnchor(character, playerIndex, regionMinX, regionMaxX, out spawn, out usedFallback);
         }
 
         bool preferLeft = random.NextDouble() < 0.5;
@@ -162,7 +178,7 @@ public class TerrainRandomSpawner : MonoBehaviour
             }
 
             TerrainCharacterSpawnRequest request = BuildRequest(character, playerIndex, minX, maxX);
-            if (!terrain.FindValidCharacterSpawn(request, random, out Vector2 candidate))
+            if (!terrain.FindValidCharacterSpawn(request, random, out Vector2 candidate, out bool candidateFallback))
             {
                 continue;
             }
@@ -172,6 +188,7 @@ public class TerrainRandomSpawner : MonoBehaviour
                 anchorDistance <= sameTeamMaximumDistance)
             {
                 spawn = candidate;
+                usedFallback = candidateFallback;
                 return true;
             }
         }
@@ -184,8 +201,10 @@ public class TerrainRandomSpawner : MonoBehaviour
         int playerIndex,
         float regionMinX,
         float regionMaxX,
-        out Vector2 spawn)
+        out Vector2 spawn,
+        out bool usedFallback)
     {
+        usedFallback = true;
         spawn = character.transform.position;
         if (!teamAnchors.TryGetValue(playerIndex, out Vector2 anchor))
         {
@@ -197,7 +216,9 @@ public class TerrainRandomSpawner : MonoBehaviour
             regionRequest.maximumSurfaceHeightDifference =
                 Mathf.Max(maximumSurfaceHeightDifference, 0.65f);
             regionRequest.randomAttempts = maxAttemptsPerCharacter * 2;
-            return terrain.FindValidCharacterSpawn(regionRequest, random, out spawn);
+            bool found = terrain.FindValidCharacterSpawn(regionRequest, random, out spawn, out _);
+            usedFallback = true;
+            return found;
         }
 
         float minX = Mathf.Max(regionMinX, anchor.x - sameTeamMaximumDistance);
@@ -207,7 +228,7 @@ public class TerrainRandomSpawner : MonoBehaviour
         request.randomAttempts = Mathf.Max(24, maxAttemptsPerCharacter / 4);
         for (int pass = 0; pass < 8; pass++)
         {
-            if (!terrain.FindValidCharacterSpawn(request, random, out Vector2 candidate))
+            if (!terrain.FindValidCharacterSpawn(request, random, out Vector2 candidate, out bool candidateFallback))
             {
                 continue;
             }
@@ -217,6 +238,7 @@ public class TerrainRandomSpawner : MonoBehaviour
                 anchorDistance <= sameTeamMaximumDistance)
             {
                 spawn = candidate;
+                usedFallback = true;
                 return true;
             }
         }

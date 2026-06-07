@@ -27,6 +27,7 @@ public class TerrainManager : MonoBehaviour
     [SerializeField, Range(0f, 1f)] private float maskAlphaThreshold = 0.1f;
     [SerializeField] private bool mergeVisibleTerrainIntoCollision = true;
     [SerializeField] private bool buildCollidersOnStart = true;
+    [SerializeField, Min(0f)] private float characterBuildClearanceWorld = 0.08f;
 
     [Header("Terrain Rules")]
     [SerializeField] private bool useIndestructibleTerrain;
@@ -308,7 +309,17 @@ public class TerrainManager : MonoBehaviour
         System.Random random,
         out Vector2 spawnWorld)
     {
+        return FindValidCharacterSpawn(request, random, out spawnWorld, out _);
+    }
+
+    public bool FindValidCharacterSpawn(
+        TerrainCharacterSpawnRequest request,
+        System.Random random,
+        out Vector2 spawnWorld,
+        out bool usedFallback)
+    {
         spawnWorld = Vector2.zero;
+        usedFallback = false;
         if (!EnsureInitialized() || random == null)
         {
             return false;
@@ -327,11 +338,27 @@ public class TerrainManager : MonoBehaviour
         }
 
         const int scanSteps = 60;
+        List<int> shuffledSteps = new List<int>(scanSteps + 1);
         for (int step = 0; step <= scanSteps; step++)
         {
+            shuffledSteps.Add(step);
+        }
+
+        for (int i = shuffledSteps.Count - 1; i > 0; i--)
+        {
+            int swapIndex = random.Next(i + 1);
+            int value = shuffledSteps[i];
+            shuffledSteps[i] = shuffledSteps[swapIndex];
+            shuffledSteps[swapIndex] = value;
+        }
+
+        for (int index = 0; index < shuffledSteps.Count; index++)
+        {
+            int step = shuffledSteps[index];
             float x = Mathf.Lerp(minX, maxX, step / (float)scanSteps);
             if (TryBuildCharacterSpawnAtX(request, x, out spawnWorld))
             {
+                usedFallback = true;
                 return true;
             }
         }
@@ -451,6 +478,53 @@ public class TerrainManager : MonoBehaviour
         bool changed = CreateCircleInternal(worldCenter, radiusPx, terrainType, blockedColliders);
         ApplyTextureAndDirtyChunks(changed);
         return changed;
+    }
+
+    public bool CreateCircleDeferred(
+        Vector2 worldCenter,
+        int radiusPx,
+        TerrainType terrainType,
+        IEnumerable<Collider2D> blockedColliders)
+    {
+        return EnsureInitialized() &&
+               radiusPx > 0 &&
+               CreateEllipseInternal(
+                   worldCenter,
+                   radiusPx,
+                   radiusPx,
+                   terrainType,
+                   blockedColliders);
+    }
+
+    public bool CreateEllipseDeferred(
+        Vector2 worldCenter,
+        int radiusXPx,
+        int radiusYPx,
+        TerrainType terrainType,
+        IEnumerable<Collider2D> blockedColliders)
+    {
+        return EnsureInitialized() &&
+               radiusXPx > 0 &&
+               radiusYPx > 0 &&
+               CreateEllipseInternal(
+                   worldCenter,
+                   radiusXPx,
+                   radiusYPx,
+                   terrainType,
+                   blockedColliders);
+    }
+
+    public void FlushDeferredTerrainChanges()
+    {
+        if (!EnsureInitialized() || dirtyChunks.Count == 0)
+        {
+            return;
+        }
+
+        runtimeVisualTexture.Apply(false);
+        runtimeCollisionTexture.Apply(false);
+        RebuildDirtyChunks();
+        TerrainChanged?.Invoke();
     }
 
     public bool CreateBridge(Vector2 startWorld, Vector2 direction, float lengthWorldUnits, int thicknessPx)
@@ -593,19 +667,34 @@ public class TerrainManager : MonoBehaviour
         TerrainType terrainType,
         IEnumerable<Collider2D> blockedColliders)
     {
+        return CreateEllipseInternal(
+            worldCenter,
+            radiusPx,
+            radiusPx,
+            terrainType,
+            blockedColliders);
+    }
+
+    private bool CreateEllipseInternal(
+        Vector2 worldCenter,
+        int radiusXPx,
+        int radiusYPx,
+        TerrainType terrainType,
+        IEnumerable<Collider2D> blockedColliders)
+    {
         Vector2Int center = WorldToPixel(worldCenter);
-        int radius = Mathf.Max(1, radiusPx);
-        int radiusSquared = radius * radius;
+        int radiusX = Mathf.Max(1, radiusXPx);
+        int radiusY = Mathf.Max(1, radiusYPx);
         Color fillColor = ColorForTerrainType(terrainType);
         bool changed = false;
 
-        for (int y = center.y - radius; y <= center.y + radius; y++)
+        for (int y = center.y - radiusY; y <= center.y + radiusY; y++)
         {
-            for (int x = center.x - radius; x <= center.x + radius; x++)
+            for (int x = center.x - radiusX; x <= center.x + radiusX; x++)
             {
-                int dx = x - center.x;
-                int dy = y - center.y;
-                if (dx * dx + dy * dy > radiusSquared)
+                float normalizedX = (x - center.x) / (float)radiusX;
+                float normalizedY = (y - center.y) / (float)radiusY;
+                if (normalizedX * normalizedX + normalizedY * normalizedY > 1f)
                 {
                     continue;
                 }
@@ -634,7 +723,7 @@ public class TerrainManager : MonoBehaviour
         return changed;
     }
 
-    private static bool IsBlockedByCollider(Vector2 worldPoint, IEnumerable<Collider2D> blockedColliders)
+    private bool IsBlockedByCollider(Vector2 worldPoint, IEnumerable<Collider2D> blockedColliders)
     {
         if (blockedColliders == null)
         {
@@ -643,7 +732,14 @@ public class TerrainManager : MonoBehaviour
 
         foreach (Collider2D blockedCollider in blockedColliders)
         {
-            if (blockedCollider != null && blockedCollider.OverlapPoint(worldPoint))
+            if (blockedCollider == null || !blockedCollider.enabled)
+            {
+                continue;
+            }
+
+            Vector2 closestPoint = blockedCollider.ClosestPoint(worldPoint);
+            if ((closestPoint - worldPoint).sqrMagnitude <=
+                characterBuildClearanceWorld * characterBuildClearanceWorld)
             {
                 return true;
             }
@@ -1033,6 +1129,7 @@ public class TerrainManager : MonoBehaviour
         collisionCellSizePx = NormalizeCollisionCellSize(collisionCellSizePx);
         collisionSolidRatioThreshold = Mathf.Clamp01(collisionSolidRatioThreshold);
         maskAlphaThreshold = Mathf.Clamp01(maskAlphaThreshold);
+        characterBuildClearanceWorld = Mathf.Max(0f, characterBuildClearanceWorld);
     }
 
     private void OnDrawGizmosSelected()
