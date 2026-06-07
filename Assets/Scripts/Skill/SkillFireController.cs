@@ -28,6 +28,7 @@ public class SkillFireController : MonoBehaviour
     private DemoSkillSelector skillSelector;
     private TurnManager turnManager;
     private bool hasFiredThisTurn;
+    private int observedTurnSerial = -1;
 
     private void Awake()
     {
@@ -42,13 +43,27 @@ public class SkillFireController : MonoBehaviour
 
     private void Update()
     {
-        if (turnCharacter == null || !turnCharacter.HasControl || powerChargeController == null)
+        if (turnManager == null)
         {
+            turnManager = FindTurnManager();
+        }
+
+        if (turnManager != null && observedTurnSerial != turnManager.TurnSerial)
+        {
+            observedTurnSerial = turnManager.TurnSerial;
             hasFiredThisTurn = false;
+        }
+
+        if (turnCharacter == null ||
+            powerChargeController == null ||
+            hasFiredThisTurn ||
+            turnManager == null ||
+            !turnManager.CanCharacterFire(turnCharacter))
+        {
             return;
         }
 
-        if (!hasFiredThisTurn && powerChargeController.ConsumeReleasedPower(out float power))
+        if (powerChargeController.ConsumeReleasedPower(out float power))
         {
             Fire(power);
         }
@@ -64,6 +79,11 @@ public class SkillFireController : MonoBehaviour
         if (skillSelector != null && !skillSelector.CanUseSelectedSkill())
         {
             Debug.Log($"{name} cannot fire skill {skillSelector.SelectedSkillIndex + 1}: cooldown {skillSelector.GetRemainingCooldown(skillSelector.SelectedSkillIndex)}.");
+            return;
+        }
+
+        if (turnManager == null || !turnManager.TryBeginAction(turnCharacter))
+        {
             return;
         }
 
@@ -110,8 +130,6 @@ public class SkillFireController : MonoBehaviour
         }
 
         skillSelector?.NotifySkillFired();
-        turnCharacter?.SetControlEnabled(false);
-        turnCharacter?.StopHorizontalMovement();
     }
 
     private TurnManager FindTurnManager()

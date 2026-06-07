@@ -26,6 +26,8 @@ public class SkillProjectile : MonoBehaviour
     private Vector2 previousPosition;
     private bool hasPreviousPosition;
 
+    public bool IsFlying => !isCompleted;
+
     public void Initialize(
         Vector2 velocity,
         float radius,
@@ -158,18 +160,20 @@ public class SkillProjectile : MonoBehaviour
 
         if (skillSettings.effectType == SkillEffectType.DelayedExplosion && skillSettings.delaySeconds > 0f)
         {
+            turnManager?.NotifyPostImpactDelay();
             StartCoroutine(DelayedImpactRoutine(impactPoint));
             return;
         }
 
         if (skillSettings.blinkBeforeEffect)
         {
+            turnManager?.NotifyPostImpactDelay();
             StartCoroutine(BlinkThenImpactRoutine(impactPoint));
             return;
         }
 
-        ApplySkillEffect(impactPoint);
-        StartCoroutine(ExplosionFadeRoutine(impactPoint));
+        turnManager?.NotifyResolving();
+        StartCoroutine(ResolveSkillEffectRoutine(impactPoint));
     }
 
     private IEnumerator DelayedImpactRoutine(Vector2 impactPoint)
@@ -184,8 +188,8 @@ public class SkillProjectile : MonoBehaviour
 
         yield return new WaitForSeconds(skillSettings.delaySeconds);
 
-        ApplySkillEffect(impactPoint);
-        StartCoroutine(ExplosionFadeRoutine(impactPoint));
+        turnManager?.NotifyResolving();
+        yield return ResolveSkillEffectRoutine(impactPoint);
     }
 
     private IEnumerator BlinkThenImpactRoutine(Vector2 impactPoint)
@@ -216,7 +220,21 @@ public class SkillProjectile : MonoBehaviour
             yield return new WaitForSeconds(interval);
         }
 
-        ApplySkillEffect(impactPoint);
+        turnManager?.NotifyResolving();
+        yield return ResolveSkillEffectRoutine(impactPoint);
+    }
+
+    private IEnumerator ResolveSkillEffectRoutine(Vector2 impactPoint)
+    {
+        if (skillSettings.effectType == SkillEffectType.ChainExplosion)
+        {
+            yield return ApplyChainExplosionRoutine(impactPoint);
+        }
+        else
+        {
+            ApplySkillEffect(impactPoint);
+        }
+
         StartCoroutine(ExplosionFadeRoutine(impactPoint));
     }
 
@@ -239,9 +257,6 @@ public class SkillProjectile : MonoBehaviour
                 CreateHazardZone(impactPoint);
                 ApplyDamage(impactPoint, fallbackHorizontalSign);
                 break;
-            case SkillEffectType.ChainExplosion:
-                ApplyChainExplosion(impactPoint, fallbackHorizontalSign);
-                break;
             case SkillEffectType.DelayedExplosion:
             case SkillEffectType.DamageExplosion:
             default:
@@ -262,12 +277,14 @@ public class SkillProjectile : MonoBehaviour
             fallbackHorizontalSign);
     }
 
-    private void ApplyChainExplosion(Vector2 impactPoint, float fallbackHorizontalSign)
+    private IEnumerator ApplyChainExplosionRoutine(Vector2 impactPoint)
     {
         int count = Mathf.Max(1, skillSettings.chainCount);
+        float fallbackHorizontalSign = Mathf.Abs(lastVelocity.x) > 0.001f ? Mathf.Sign(lastVelocity.x) : 0f;
         Vector2 spreadDirection = GetHorizontalImpactDirection();
         Vector2 perpendicular = new Vector2(-spreadDirection.y, spreadDirection.x);
-        Vector2[] explosionPoints = new Vector2[count];
+        float delay = Mathf.Clamp(skillSettings.chainDelaySeconds, 0.08f, 0.15f);
+        Dictionary<CharacterCombat, int> accumulatedDamage = new Dictionary<CharacterCombat, int>();
 
         for (int i = 0; i < count; i++)
         {
@@ -276,86 +293,63 @@ public class SkillProjectile : MonoBehaviour
                 + spreadDirection * (centeredIndex * skillSettings.chainSpacingWorld)
                 + perpendicular * (Mathf.Sin(i * 1.7f) * skillSettings.chainSpacingWorld * 0.5f);
 
-            explosionPoints[i] = point;
             DestroyTerrainAtImpact(point);
             SpawnExplosionMarker(point);
-        }
+            ApplyCappedChainDamageAtPoint(point, fallbackHorizontalSign, accumulatedDamage);
 
-        ApplyCappedChainDamage(explosionPoints, fallbackHorizontalSign);
+            if (i < count - 1)
+            {
+                yield return new WaitForSeconds(delay);
+            }
+        }
     }
 
-    private void ApplyCappedChainDamage(Vector2[] explosionPoints, float fallbackHorizontalSign)
+    private void ApplyCappedChainDamageAtPoint(
+        Vector2 center,
+        float fallbackHorizontalSign,
+        Dictionary<CharacterCombat, int> accumulatedDamage)
     {
-        if (explosionPoints == null || explosionPoints.Length == 0 || skillSettings.maxDamage <= 0 || skillSettings.explosionRadiusWorld <= 0f)
+        if (skillSettings.maxDamage <= 0 || skillSettings.explosionRadiusWorld <= 0f)
         {
             return;
         }
 
         int damageCap = Mathf.Max(skillSettings.maxDamage, skillSettings.chainMaxTotalDamage);
-        Dictionary<CharacterCombat, int> damageByCharacter = new Dictionary<CharacterCombat, int>();
-        Dictionary<CharacterCombat, Vector2> forceByCharacter = new Dictionary<CharacterCombat, Vector2>();
+        Collider2D[] hits = Physics2D.OverlapCircleAll(center, skillSettings.explosionRadiusWorld);
+        HashSet<CharacterCombat> damagedAtThisPoint = new HashSet<CharacterCombat>();
 
-        for (int i = 0; i < explosionPoints.Length; i++)
+        for (int i = 0; i < hits.Length; i++)
         {
-            Vector2 center = explosionPoints[i];
-            Collider2D[] hits = Physics2D.OverlapCircleAll(center, skillSettings.explosionRadiusWorld);
-            HashSet<CharacterCombat> damagedAtThisPoint = new HashSet<CharacterCombat>();
-
-            for (int hitIndex = 0; hitIndex < hits.Length; hitIndex++)
-            {
-                Collider2D hit = hits[hitIndex];
-                if (hit == null)
-                {
-                    continue;
-                }
-
-                CharacterCombat combat = hit.GetComponentInParent<CharacterCombat>();
-                if (combat == null || combat.IsDead || !damagedAtThisPoint.Add(combat))
-                {
-                    continue;
-                }
-
-                Vector2 characterCenter = combat.KnockbackCenter;
-                Vector2 impactToCharacter = characterCenter - center;
-                float distance = impactToCharacter.magnitude;
-                float distanceRatio = Mathf.Clamp01(distance / skillSettings.explosionRadiusWorld);
-                float falloff = 1f - distanceRatio;
-                int damage = Mathf.CeilToInt(skillSettings.maxDamage * falloff);
-                if (damage <= 0)
-                {
-                    continue;
-                }
-
-                damageByCharacter.TryGetValue(combat, out int currentDamage);
-                damageByCharacter[combat] = Mathf.Min(damageCap, currentDamage + damage);
-
-                Vector2 knockbackDirection = CalculateKnockbackDirection(center, characterCenter, impactToCharacter, fallbackHorizontalSign);
-                float curvedFalloff = Mathf.Pow(falloff, 0.75f);
-                float knockbackFalloff = Mathf.Lerp(MinimumKnockbackFalloff, 1f, curvedFalloff);
-                Vector2 force = knockbackDirection * skillSettings.knockbackForce * knockbackFalloff;
-
-                forceByCharacter.TryGetValue(combat, out Vector2 currentForce);
-                forceByCharacter[combat] = currentForce + force;
-            }
-        }
-
-        foreach (KeyValuePair<CharacterCombat, int> pair in damageByCharacter)
-        {
-            CharacterCombat combat = pair.Key;
-            if (combat == null || combat.IsDead)
+            CharacterCombat combat = hits[i] != null ? hits[i].GetComponentInParent<CharacterCombat>() : null;
+            if (combat == null || combat.IsDead || !damagedAtThisPoint.Add(combat))
             {
                 continue;
             }
 
-            forceByCharacter.TryGetValue(combat, out Vector2 force);
-            float maxForce = Mathf.Max(skillSettings.knockbackForce, skillSettings.knockbackForce * 1.45f);
-            if (force.magnitude > maxForce)
+            accumulatedDamage.TryGetValue(combat, out int currentDamage);
+            int remainingDamage = damageCap - currentDamage;
+            if (remainingDamage <= 0)
             {
-                force = force.normalized * maxForce;
+                continue;
             }
 
-            combat.ApplyKnockback(force);
-            combat.TakeDamage(pair.Value);
+            Vector2 characterCenter = combat.KnockbackCenter;
+            Vector2 impactToCharacter = characterCenter - center;
+            float distanceRatio = Mathf.Clamp01(impactToCharacter.magnitude / skillSettings.explosionRadiusWorld);
+            float falloff = 1f - distanceRatio;
+            int damage = Mathf.Min(remainingDamage, Mathf.CeilToInt(skillSettings.maxDamage * falloff));
+            if (damage <= 0)
+            {
+                continue;
+            }
+
+            Vector2 knockbackDirection = CalculateKnockbackDirection(center, characterCenter, impactToCharacter, fallbackHorizontalSign);
+            float curvedFalloff = Mathf.Pow(falloff, 0.75f);
+            float knockbackFalloff = Mathf.Lerp(MinimumKnockbackFalloff, 1f, curvedFalloff);
+
+            combat.ApplyKnockback(knockbackDirection * skillSettings.knockbackForce * knockbackFalloff);
+            combat.TakeDamage(damage);
+            accumulatedDamage[combat] = currentDamage + damage;
         }
     }
 
@@ -466,7 +460,7 @@ public class SkillProjectile : MonoBehaviour
 
     private void CreateHazardZone(Vector2 impactPoint)
     {
-        if (skillSettings.zoneDurationSeconds <= 0f || skillSettings.zoneDamagePerTick <= 0)
+        if (skillSettings.zoneDurationTurns <= 0 || skillSettings.zoneDamagePerTick <= 0)
         {
             return;
         }
@@ -474,12 +468,13 @@ public class SkillProjectile : MonoBehaviour
         HazardZone.Create(
             impactPoint,
             skillSettings.explosionRadiusWorld,
-            skillSettings.zoneDurationSeconds,
+            skillSettings.zoneDurationTurns,
             skillSettings.zoneDamagePerTick,
             skillSettings.zoneTickSeconds,
             skillSettings.slowMultiplier,
             skillSettings.impactColor,
-            owner);
+            owner,
+            turnManager);
     }
 
     private Collider2D[] FindBlockedCharacterColliders()
@@ -513,7 +508,7 @@ public class SkillProjectile : MonoBehaviour
 
         if (turnManager != null)
         {
-            turnManager.EndTurn();
+            turnManager.NotifyActionResolved();
         }
     }
 

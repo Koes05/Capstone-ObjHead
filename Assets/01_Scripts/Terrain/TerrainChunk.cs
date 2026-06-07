@@ -6,6 +6,7 @@ public class TerrainChunk : MonoBehaviour
     private Vector2Int chunkCoord;
     private RectInt pixelRect;
     private int collisionCellSizePx;
+    [SerializeField, Range(0f, 1f)] private float solidRatioThreshold = 0.4f;
 
     public Vector2Int ChunkCoord
     {
@@ -17,12 +18,13 @@ public class TerrainChunk : MonoBehaviour
         get { return pixelRect; }
     }
 
-    public void Initialize(TerrainManager terrainOwner, Vector2Int coord, RectInt rect, int cellSizePx)
+    public void Initialize(TerrainManager terrainOwner, Vector2Int coord, RectInt rect, int cellSizePx, float ratioThreshold)
     {
         owner = terrainOwner;
         chunkCoord = coord;
         pixelRect = rect;
         collisionCellSizePx = Mathf.Max(1, cellSizePx);
+        solidRatioThreshold = Mathf.Clamp01(ratioThreshold);
     }
 
     public void RebuildColliders()
@@ -51,7 +53,7 @@ public class TerrainChunk : MonoBehaviour
                 {
                     int x = pixelRect.xMin + column * collisionCellSizePx;
                     int width = Mathf.Min(collisionCellSizePx, pixelRect.xMax - x);
-                    solid = owner.AnySolidInPixelRect(x, y, width, height);
+                    solid = SolidRatioInPixelRect(x, y, width, height) >= solidRatioThreshold;
                 }
 
                 if (solid && runStart < 0)
@@ -65,6 +67,11 @@ public class TerrainChunk : MonoBehaviour
                 }
             }
         }
+    }
+
+    private float SolidRatioInPixelRect(int x, int y, int width, int height)
+    {
+        return owner != null ? owner.SolidRatioInPixelRect(x, y, width, height) : 0f;
     }
 
     private void CreateRunCollider(int startColumn, int endColumn, int row, int height)
@@ -91,6 +98,7 @@ public class TerrainChunk : MonoBehaviour
         {
             if (Application.isPlaying)
             {
+                colliders[i].enabled = false;
                 Destroy(colliders[i]);
             }
             else

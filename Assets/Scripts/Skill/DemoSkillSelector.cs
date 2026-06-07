@@ -28,9 +28,10 @@ public struct ObjectHeadSkillSettings
     public int bridgeThicknessPx;
     public int chainCount;
     public float chainSpacingWorld;
+    public float chainDelaySeconds;
     public int chainMaxTotalDamage;
     public float delaySeconds;
-    public float zoneDurationSeconds;
+    public int zoneDurationTurns;
     public int zoneDamagePerTick;
     public float zoneTickSeconds;
     public float slowMultiplier;
@@ -63,9 +64,10 @@ public struct ObjectHeadSkillSettings
             bridgeThicknessPx = 8,
             chainCount = 1,
             chainSpacingWorld = 0.25f,
+            chainDelaySeconds = 0.1f,
             chainMaxTotalDamage = maxDamage,
             delaySeconds = 0f,
-            zoneDurationSeconds = 0f,
+            zoneDurationTurns = 0,
             zoneDamagePerTick = 0,
             zoneTickSeconds = 1f,
             slowMultiplier = 1f,
@@ -200,7 +202,7 @@ public class DemoSkillSelector : MonoBehaviour
             settings.explosionRadiusWorld = 0.75f;
             settings.knockbackForce = 2f;
             settings.zoneDamagePerTick = 8;
-            settings.zoneDurationSeconds = 4f;
+            settings.zoneDurationTurns = 3;
             settings.zoneTickSeconds = 1f;
             return;
         }
@@ -212,7 +214,7 @@ public class DemoSkillSelector : MonoBehaviour
             settings.explosionRadiusWorld = 1.05f;
             settings.knockbackForce = 2f;
             settings.zoneDamagePerTick = 10;
-            settings.zoneDurationSeconds = 4f;
+            settings.zoneDurationTurns = 3;
             settings.zoneTickSeconds = 1f;
             settings.slowMultiplier = 0.6f;
             settings.impactColor = new Color(1f, 0.9f, 0.15f, 0.48f);
@@ -222,13 +224,14 @@ public class DemoSkillSelector : MonoBehaviour
         settings.effectType = SkillEffectType.ChainExplosion;
         settings.maxDamage = 8;
         settings.chainMaxTotalDamage = 35;
-        settings.explosionRadiusWorld = 0.48f;
+        settings.explosionRadiusWorld = 0.78f;
         settings.knockbackForce = 4f;
-        settings.terrainRadiusPx = 10;
-        settings.chainCount = 5;
-        settings.chainSpacingWorld = 0.3f;
+        settings.terrainRadiusPx = 18;
+        settings.chainCount = 6;
+        settings.chainSpacingWorld = 0.5f;
+        settings.chainDelaySeconds = 0.1f;
         settings.blinkBeforeEffect = true;
-        settings.blinkSeconds = 0.55f;
+        settings.blinkSeconds = 0.7f;
         settings.blinkIntervalSeconds = 0.085f;
         settings.blinkSpriteA = Resources.Load<Sprite>("Sprites/Heads/head_bulb_on");
         settings.blinkSpriteB = Resources.Load<Sprite>("Sprites/Heads/head_bulb_off");
@@ -264,7 +267,7 @@ public class DemoSkillSelector : MonoBehaviour
         settings.maxDamage = 10;
         settings.explosionRadiusWorld = 1f;
         settings.zoneDamagePerTick = 12;
-        settings.zoneDurationSeconds = 4f;
+        settings.zoneDurationTurns = 3;
         settings.zoneTickSeconds = 1f;
         settings.impactColor = new Color(0.24f, 0.78f, 0.24f, 0.48f);
     }
@@ -279,9 +282,9 @@ public class DemoSkillSelector : MonoBehaviour
         {
             settings.effectType = SkillEffectType.DamageExplosion;
             settings.maxDamage = 15;
-            settings.explosionRadiusWorld = 0.75f;
-            settings.terrainRadiusPx = 18;
-            settings.knockbackForce = 11f;
+            settings.explosionRadiusWorld = 1.2f;
+            settings.terrainRadiusPx = 30;
+            settings.knockbackForce = 12f;
             return;
         }
 
@@ -289,10 +292,10 @@ public class DemoSkillSelector : MonoBehaviour
         {
             settings.effectType = SkillEffectType.DelayedExplosion;
             settings.maxDamage = 30;
-            settings.explosionRadiusWorld = 1f;
-            settings.terrainRadiusPx = 28;
+            settings.explosionRadiusWorld = 1.8f;
+            settings.terrainRadiusPx = 52;
             settings.knockbackForce = 8f;
-            settings.delaySeconds = 1f;
+            settings.delaySeconds = 2f;
             settings.impactColor = new Color(1f, 0.05f, 0.02f, 0.58f);
             return;
         }
@@ -300,11 +303,12 @@ public class DemoSkillSelector : MonoBehaviour
         settings.effectType = SkillEffectType.ChainExplosion;
         settings.maxDamage = 10;
         settings.chainMaxTotalDamage = 45;
-        settings.explosionRadiusWorld = 0.64f;
-        settings.terrainRadiusPx = 20;
+        settings.explosionRadiusWorld = 0.72f;
+        settings.terrainRadiusPx = 18;
         settings.knockbackForce = 7f;
         settings.chainCount = 6;
-        settings.chainSpacingWorld = 0.36f;
+        settings.chainSpacingWorld = 0.62f;
+        settings.chainDelaySeconds = 0.11f;
         settings.impactColor = new Color(1f, 0.85f, 0.05f, 0.55f);
     }
 

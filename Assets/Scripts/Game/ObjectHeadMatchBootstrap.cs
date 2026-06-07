@@ -55,6 +55,7 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
 
         turnManager = new GameObject("TurnManager").AddComponent<TurnManager>();
         TurnCharacterController[] orderedCharacters = SpawnDefaultTeams(terrain);
+        BuildCommonHeadSystem(terrain, turnManager);
         turnManager.SetCharacters(orderedCharacters);
 
         ObjectHeadCameraController cameraController = camera.GetComponent<ObjectHeadCameraController>();
@@ -78,7 +79,9 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
         DestroyObjects<ObjectHeadHUD>();
         DestroyRootObjects<TerrainManager>();
         DestroyRootObjects<TerrainRandomSpawner>();
-        DestroyNamedRoots("PlayerCube_", "Ground", "TerrainRoot", "SpawnGroup_", "Background_OceanSky", "WaterZone", "DeathZone");
+        DestroyRootObjects<CommonHeadItemSpawner>();
+        DestroyRootObjects<CommonHeadItem>();
+        DestroyNamedRoots("PlayerCube_", "Ground", "TerrainRoot", "SpawnGroup_", "ItemSpawnRoot", "Background_OceanSky", "WaterZone", "DeathZone");
     }
 
     private TerrainManager BuildTerrain(Camera camera)
@@ -217,6 +220,30 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
         return ordered.ToArray();
     }
 
+    private void BuildCommonHeadSystem(TerrainManager manager, TurnManager managerForTurns)
+    {
+        if (manager == null || managerForTurns == null)
+        {
+            return;
+        }
+
+        GameObject spawnRootObject = new GameObject("ItemSpawnRoot");
+        float[] normalizedPositions = { 0.1f, 0.25f, 0.4f, 0.6f, 0.75f, 0.9f };
+
+        for (int i = 0; i < normalizedPositions.Length; i++)
+        {
+            Vector2 position = FindGroundSpawn(manager, normalizedPositions[i]) + Vector2.up * 1.3f;
+            GameObject pointObject = new GameObject($"ItemSpawnPoint_{i + 1}");
+            pointObject.transform.SetParent(spawnRootObject.transform, false);
+            pointObject.transform.position = position;
+            pointObject.AddComponent<ItemSpawnPoint>();
+        }
+
+        GameObject spawnerObject = new GameObject("CommonHeadItemSpawner");
+        CommonHeadItemSpawner spawner = spawnerObject.AddComponent<CommonHeadItemSpawner>();
+        spawner.Configure(managerForTurns, spawnRootObject.transform);
+    }
+
     private void CreateSpawnMarker(Transform parent, Vector2 position, int playerIndex, int slotIndex)
     {
         GameObject marker = new GameObject($"P{playerIndex}_Spawn_{slotIndex}");
@@ -250,6 +277,8 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
         DemoSkillSelector skill = character.AddComponent<DemoSkillSelector>();
         SkillFireController fire = character.AddComponent<SkillFireController>();
         ObjectHeadTeamMember member = character.AddComponent<ObjectHeadTeamMember>();
+        CommonHeadInventory commonHeadInventory = character.AddComponent<CommonHeadInventory>();
+        CommonHeadUseController commonHeadUse = character.AddComponent<CommonHeadUseController>();
 
         skill.SetCharacterKind(kind);
         skill.SetSkillIndex(0);
@@ -261,6 +290,8 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
         _ = aim;
         _ = power;
         _ = fire;
+        _ = commonHeadInventory;
+        _ = commonHeadUse;
         return character.GetComponent<TurnCharacterController>();
     }
 

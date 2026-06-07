@@ -17,6 +17,7 @@ public class TerrainManager : MonoBehaviour
     [Header("Collision")]
     [SerializeField] private int chunkSizePx = 64;
     [SerializeField] private int collisionCellSizePx = 8;
+    [SerializeField, Range(0f, 1f)] private float collisionSolidRatioThreshold = 0.4f;
     [SerializeField] private bool buildCollidersOnStart = true;
 
     [Header("Terrain Colors")]
@@ -295,25 +296,32 @@ public class TerrainManager : MonoBehaviour
         dirtyChunks.Clear();
     }
 
-    internal bool AnySolidInPixelRect(int x, int y, int width, int height)
+    internal float SolidRatioInPixelRect(int x, int y, int width, int height)
     {
         int minX = Mathf.Clamp(x, 0, WidthPx);
         int minY = Mathf.Clamp(y, 0, HeightPx);
         int maxX = Mathf.Clamp(x + width, 0, WidthPx);
         int maxY = Mathf.Clamp(y + height, 0, HeightPx);
 
+        int totalPixels = Mathf.Max(0, maxX - minX) * Mathf.Max(0, maxY - minY);
+        if (totalPixels <= 0)
+        {
+            return 0f;
+        }
+
+        int solidPixels = 0;
         for (int py = minY; py < maxY; py++)
         {
             for (int px = minX; px < maxX; px++)
             {
                 if (solidMask[px, py])
                 {
-                    return true;
+                    solidPixels++;
                 }
             }
         }
 
-        return false;
+        return solidPixels / (float)totalPixels;
     }
 
     internal Vector2 PixelRectCenterToLocal(int x, int y, int width, int height)
@@ -588,7 +596,12 @@ public class TerrainManager : MonoBehaviour
                 chunkObject.transform.localPosition = Vector3.zero;
 
                 TerrainChunk chunk = chunkObject.AddComponent<TerrainChunk>();
-                chunk.Initialize(this, new Vector2Int(x, y), new RectInt(pixelX, pixelY, width, height), collisionCellSizePx);
+                chunk.Initialize(
+                    this,
+                    new Vector2Int(x, y),
+                    new RectInt(pixelX, pixelY, width, height),
+                    collisionCellSizePx,
+                    collisionSolidRatioThreshold);
                 chunks[x, y] = chunk;
             }
         }
@@ -642,6 +655,7 @@ public class TerrainManager : MonoBehaviour
         pixelsPerUnit = Mathf.Max(1, pixelsPerUnit);
         chunkSizePx = Mathf.Max(1, chunkSizePx);
         collisionCellSizePx = Mathf.Max(1, collisionCellSizePx);
+        collisionSolidRatioThreshold = Mathf.Clamp01(collisionSolidRatioThreshold);
     }
 
     private void OnDrawGizmosSelected()

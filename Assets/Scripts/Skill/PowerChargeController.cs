@@ -11,6 +11,7 @@ public class PowerChargeController : MonoBehaviour
 
     private TurnCharacterController turnCharacter;
     private AimController aimController;
+    private TurnManager turnManager;
     private bool isCharging;
     private bool hasReleasedPower;
     private float currentPower;
@@ -23,6 +24,7 @@ public class PowerChargeController : MonoBehaviour
     {
         turnCharacter = GetComponent<TurnCharacterController>();
         aimController = GetComponent<AimController>();
+        turnManager = FindTurnManager();
     }
 
     private void OnDisable()
@@ -33,7 +35,15 @@ public class PowerChargeController : MonoBehaviour
 
     private void Update()
     {
-        if (turnCharacter == null || !turnCharacter.HasControl)
+        if (turnManager == null)
+        {
+            turnManager = FindTurnManager();
+        }
+
+        if (turnCharacter == null ||
+            !turnCharacter.HasControl ||
+            turnManager == null ||
+            !turnManager.CanCharacterFire(turnCharacter))
         {
             ResetCharge();
             return;
@@ -63,6 +73,15 @@ public class PowerChargeController : MonoBehaviour
         {
             ReleasePower(Mathf.Max(currentPower, minimumFirePower));
         }
+    }
+
+    private TurnManager FindTurnManager()
+    {
+#if UNITY_6000_0_OR_NEWER || UNITY_2023_1_OR_NEWER
+        return Object.FindAnyObjectByType<TurnManager>();
+#else
+        return Object.FindObjectOfType<TurnManager>();
+#endif
     }
 
     public bool ConsumeReleasedPower(out float power)

@@ -19,6 +19,9 @@ public class ObjectHeadCameraController : MonoBehaviour
 
     private Camera targetCamera;
     private Vector3 manualOffset;
+    private bool overviewMode;
+    private bool forceCharacterFocus;
+    private SkillProjectile lastSeenProjectile;
 
     private void Awake()
     {
@@ -49,6 +52,12 @@ public class ObjectHeadCameraController : MonoBehaviour
         }
 
         ReadManualInput();
+
+        if (overviewMode)
+        {
+            transform.position = ClampToTerrain(transform.position);
+            return;
+        }
 
         Transform target = FindFollowTarget();
         if (target != null)
@@ -87,8 +96,10 @@ public class ObjectHeadCameraController : MonoBehaviour
         Vector2 center = terrain.TerrainOriginWorld + new Vector2(widthWorld * 0.5f, heightWorld * 0.5f);
         float sizeByHeight = heightWorld * 0.5f + paddingWorld.y;
         float sizeByWidth = widthWorld / (2f * Mathf.Max(0.01f, targetCamera.aspect)) + paddingWorld.x;
-        targetCamera.orthographicSize = Mathf.Clamp(Mathf.Max(sizeByHeight, sizeByWidth), minSize, maxSize);
+        targetCamera.orthographicSize = Mathf.Max(minSize, Mathf.Max(sizeByHeight, sizeByWidth));
         manualOffset = Vector3.zero;
+        overviewMode = true;
+        forceCharacterFocus = false;
         transform.position = ClampToTerrain(new Vector3(center.x, center.y, transform.position.z));
     }
 
@@ -104,7 +115,11 @@ public class ObjectHeadCameraController : MonoBehaviour
             targetCamera.orthographicSize = Mathf.Clamp(defaultPlaySize, minSize, maxSize);
         }
 
-        Transform target = FindFollowTarget();
+        overviewMode = false;
+        forceCharacterFocus = true;
+        Transform target = turnManager != null && turnManager.CurrentCharacter != null
+            ? turnManager.CurrentCharacter.transform
+            : null;
         if (target != null)
         {
             manualOffset = Vector3.zero;
@@ -126,14 +141,14 @@ public class ObjectHeadCameraController : MonoBehaviour
         Keyboard keyboard = Keyboard.current;
         if (keyboard != null)
         {
-            if (keyboard.jKey.isPressed) pan.x -= 1f;
-            if (keyboard.lKey.isPressed) pan.x += 1f;
-            if (keyboard.kKey.isPressed) pan.y -= 1f;
-            if (keyboard.iKey.isPressed) pan.y += 1f;
+            if (keyboard.oKey.isPressed) pan.y += 1f;
+            if (keyboard.kKey.isPressed) pan.x -= 1f;
+            if (keyboard.lKey.isPressed) pan.y -= 1f;
+            if (keyboard.semicolonKey.isPressed) pan.x += 1f;
             if (keyboard.minusKey.isPressed || keyboard.numpadMinusKey.isPressed) zoomDelta += 1f;
             if (keyboard.equalsKey.isPressed || keyboard.numpadPlusKey.isPressed) zoomDelta -= 1f;
-            resetOffset = keyboard.homeKey.wasPressedThisFrame;
-            overview = keyboard.oKey.wasPressedThisFrame;
+            resetOffset = keyboard.iKey.wasPressedThisFrame;
+            overview = keyboard.pKey.wasPressedThisFrame;
         }
 
         Mouse mouse = Mouse.current;
@@ -148,10 +163,10 @@ public class ObjectHeadCameraController : MonoBehaviour
             }
         }
 #else
-        if (Input.GetKey(KeyCode.J)) pan.x -= 1f;
-        if (Input.GetKey(KeyCode.L)) pan.x += 1f;
-        if (Input.GetKey(KeyCode.K)) pan.y -= 1f;
-        if (Input.GetKey(KeyCode.I)) pan.y += 1f;
+        if (Input.GetKey(KeyCode.O)) pan.y += 1f;
+        if (Input.GetKey(KeyCode.K)) pan.x -= 1f;
+        if (Input.GetKey(KeyCode.L)) pan.y -= 1f;
+        if (Input.GetKey(KeyCode.Semicolon)) pan.x += 1f;
         if (Input.GetKey(KeyCode.Minus) || Input.GetKey(KeyCode.KeypadMinus)) zoomDelta += 1f;
         if (Input.GetKey(KeyCode.Equals) || Input.GetKey(KeyCode.KeypadPlus)) zoomDelta -= 1f;
         zoomDelta -= Input.mouseScrollDelta.y * 0.25f;
@@ -160,8 +175,8 @@ public class ObjectHeadCameraController : MonoBehaviour
             pan.x -= Input.GetAxisRaw("Mouse X") * 12f;
             pan.y -= Input.GetAxisRaw("Mouse Y") * 12f;
         }
-        resetOffset = Input.GetKeyDown(KeyCode.Home);
-        overview = Input.GetKeyDown(KeyCode.O);
+        resetOffset = Input.GetKeyDown(KeyCode.I);
+        overview = Input.GetKeyDown(KeyCode.P);
 #endif
 
         if (overview)
@@ -174,24 +189,48 @@ public class ObjectHeadCameraController : MonoBehaviour
         {
             manualOffset = Vector3.zero;
             FocusOnCurrentTarget(false);
+            return;
         }
 
         if (pan.sqrMagnitude > 0f)
         {
+            ExitOverviewAtCurrentPosition();
             manualOffset += (Vector3)(pan.normalized * manualPanSpeed * Time.deltaTime);
         }
 
         if (Mathf.Abs(zoomDelta) > 0f)
         {
+            ExitOverviewAtCurrentPosition();
             targetCamera.orthographicSize = Mathf.Clamp(targetCamera.orthographicSize + zoomDelta * zoomSpeed * Time.deltaTime, minSize, maxSize);
             transform.position = ClampToTerrain(transform.position);
         }
     }
 
+    private void ExitOverviewAtCurrentPosition()
+    {
+        if (!overviewMode)
+        {
+            return;
+        }
+
+        overviewMode = false;
+        Transform target = FindFollowTarget();
+        manualOffset = target != null
+            ? transform.position - new Vector3(target.position.x, target.position.y, transform.position.z)
+            : Vector3.zero;
+    }
+
     private Transform FindFollowTarget()
     {
         SkillProjectile projectile = FindAny<SkillProjectile>();
-        if (projectile != null)
+        if (projectile != null && projectile != lastSeenProjectile)
+        {
+            lastSeenProjectile = projectile;
+            forceCharacterFocus = false;
+            manualOffset = Vector3.zero;
+        }
+
+        if (!forceCharacterFocus && projectile != null && projectile.IsFlying)
         {
             return projectile.transform;
         }
@@ -215,8 +254,12 @@ public class ObjectHeadCameraController : MonoBehaviour
         float minY = terrain.TerrainOriginWorld.y + halfHeight - paddingWorld.y;
         float maxY = terrain.TerrainOriginWorld.y + terrain.HeightPx / (float)terrain.PixelsPerUnit - halfHeight + paddingWorld.y;
 
-        if (minX <= maxX) position.x = Mathf.Clamp(position.x, minX, maxX);
-        if (minY <= maxY) position.y = Mathf.Clamp(position.y, minY, maxY);
+        position.x = minX <= maxX
+            ? Mathf.Clamp(position.x, minX, maxX)
+            : terrain.TerrainOriginWorld.x + terrain.WidthPx / (2f * terrain.PixelsPerUnit);
+        position.y = minY <= maxY
+            ? Mathf.Clamp(position.y, minY, maxY)
+            : terrain.TerrainOriginWorld.y + terrain.HeightPx / (2f * terrain.PixelsPerUnit);
         return position;
     }
 

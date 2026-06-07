@@ -1,9 +1,19 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
+
+public enum TurnPhase
+{
+    Aiming,
+    ProjectileFlying,
+    PostImpactDelay,
+    Resolving,
+    WaitingManualEnd,
+    MatchOver
+}
 
 public class TurnManager : MonoBehaviour
 {
@@ -16,18 +26,28 @@ public class TurnManager : MonoBehaviour
     private bool isMatchOver;
     private int winningPlayerIndex = -1;
     private float remainingTurnSeconds;
+    private int turnSerial;
+    private bool hasStartedAnyTurn;
 
     public event Action<TurnCharacterController> TurnStarted;
+    public event Action<TurnPhase> TurnPhaseChanged;
     public event Action<int> MatchEnded;
 
     public TurnCharacterController CurrentCharacter { get; private set; }
     public TurnCharacterController[] Characters => characters;
     public int CurrentTurnIndex => currentTurnIndex;
+    public TurnPhase CurrentPhase { get; private set; } = TurnPhase.Aiming;
+    public int TurnSerial => turnSerial;
     public bool IsMatchOver => isMatchOver;
     public int WinningPlayerIndex => winningPlayerIndex;
     public float TurnDurationSeconds => turnDurationSeconds;
     public float RemainingTurnSeconds => remainingTurnSeconds;
     public float TurnTime01 => turnDurationSeconds > 0f ? Mathf.Clamp01(remainingTurnSeconds / turnDurationSeconds) : 0f;
+    public bool IsActionPending =>
+        CurrentPhase == TurnPhase.ProjectileFlying ||
+        CurrentPhase == TurnPhase.PostImpactDelay ||
+        CurrentPhase == TurnPhase.Resolving;
+
     public int CurrentPlayerIndex
     {
         get
@@ -66,7 +86,6 @@ public class TurnManager : MonoBehaviour
         }
 
         currentTurnIndex = Mathf.Clamp(startingIndex, 0, characters.Length - 1);
-
         if (!CanTakeTurn(characters[currentTurnIndex]))
         {
             currentTurnIndex = FindNextTurnIndex(currentTurnIndex - 1);
@@ -90,6 +109,67 @@ public class TurnManager : MonoBehaviour
         }
     }
 
+    public bool CanCharacterMove(TurnCharacterController character)
+    {
+        if (character == null || character != CurrentCharacter || isMatchOver)
+        {
+            return false;
+        }
+
+        return CurrentPhase == TurnPhase.Aiming ||
+               CurrentPhase == TurnPhase.PostImpactDelay ||
+               CurrentPhase == TurnPhase.WaitingManualEnd;
+    }
+
+    public bool CanCharacterFire(TurnCharacterController character)
+    {
+        return character != null &&
+               character == CurrentCharacter &&
+               !isMatchOver &&
+               CurrentPhase == TurnPhase.Aiming;
+    }
+
+    public bool TryBeginAction(TurnCharacterController character)
+    {
+        if (!CanCharacterFire(character))
+        {
+            return false;
+        }
+
+        SetPhase(TurnPhase.ProjectileFlying);
+        return true;
+    }
+
+    public void NotifyPostImpactDelay()
+    {
+        if (!isMatchOver && CurrentCharacter != null)
+        {
+            SetPhase(TurnPhase.PostImpactDelay);
+        }
+    }
+
+    public void NotifyResolving()
+    {
+        if (!isMatchOver && CurrentCharacter != null)
+        {
+            SetPhase(TurnPhase.Resolving);
+        }
+    }
+
+    public void NotifyActionResolved(bool endTurnAutomatically = true)
+    {
+        if (isMatchOver || CurrentCharacter == null)
+        {
+            return;
+        }
+
+        SetPhase(TurnPhase.WaitingManualEnd);
+        if (endTurnAutomatically)
+        {
+            AdvanceTurn();
+        }
+    }
+
     public void EndCurrentTurn()
     {
         EndTurn();
@@ -97,36 +177,12 @@ public class TurnManager : MonoBehaviour
 
     public void EndTurn()
     {
-        if (isMatchOver)
+        if (isMatchOver || IsActionPending)
         {
             return;
         }
 
-        if (characters == null || characters.Length == 0)
-        {
-            RefreshCharactersFromScene();
-        }
-
-        if (characters == null || characters.Length == 0)
-        {
-            return;
-        }
-
-        if (TryResolveVictory())
-        {
-            return;
-        }
-
-        int nextIndex = FindNextTurnIndex(currentTurnIndex);
-        if (nextIndex < 0)
-        {
-            ClearCurrentTurn();
-            Debug.LogWarning($"{nameof(TurnManager)} could not find an available character.");
-            return;
-        }
-
-        currentTurnIndex = nextIndex;
-        ApplyCurrentTurn();
+        AdvanceTurn();
     }
 
     public void RefreshCharactersFromScene()
@@ -147,6 +203,8 @@ public class TurnManager : MonoBehaviour
         isMatchOver = false;
         winningPlayerIndex = -1;
         currentTurnIndex = characters.Length == 0 ? -1 : Mathf.Clamp(startingIndex, 0, characters.Length - 1);
+        turnSerial = 0;
+        hasStartedAnyTurn = false;
         SubscribeCharacterDeaths();
         ApplyCurrentTurn();
     }
@@ -165,13 +223,13 @@ public class TurnManager : MonoBehaviour
 
         if (CurrentCharacter != null && combat.gameObject == CurrentCharacter.gameObject)
         {
-            EndTurn();
+            AdvanceTurn();
         }
     }
 
     private void TickTurnTimer()
     {
-        if (CurrentCharacter == null || !CurrentCharacter.HasControl)
+        if (CurrentCharacter == null || CurrentPhase != TurnPhase.Aiming)
         {
             return;
         }
@@ -180,8 +238,37 @@ public class TurnManager : MonoBehaviour
         if (remainingTurnSeconds <= 0f)
         {
             Debug.Log("Turn timer expired.");
-            EndTurn();
+            AdvanceTurn();
         }
+    }
+
+    private void AdvanceTurn()
+    {
+        if (isMatchOver)
+        {
+            return;
+        }
+
+        if (characters == null || characters.Length == 0)
+        {
+            RefreshCharactersFromScene();
+        }
+
+        if (characters == null || characters.Length == 0 || TryResolveVictory())
+        {
+            return;
+        }
+
+        int nextIndex = FindNextTurnIndex(currentTurnIndex);
+        if (nextIndex < 0)
+        {
+            ClearCurrentTurn();
+            Debug.LogWarning($"{nameof(TurnManager)} could not find an available character.");
+            return;
+        }
+
+        currentTurnIndex = nextIndex;
+        ApplyCurrentTurn();
     }
 
     private void ApplyCurrentTurn()
@@ -208,24 +295,16 @@ public class TurnManager : MonoBehaviour
             CurrentCharacter = characters[currentTurnIndex];
         }
 
-        for (int i = 0; i < characters.Length; i++)
+        if (hasStartedAnyTurn)
         {
-            TurnCharacterController character = characters[i];
-            if (character == null)
-            {
-                continue;
-            }
-
-            bool isCurrent = i == currentTurnIndex && CanTakeTurn(character);
-            character.SetControlEnabled(isCurrent);
-
-            if (!isCurrent)
-            {
-                character.StopHorizontalMovement();
-            }
+            AdvanceHazardTurns();
         }
 
+        hasStartedAnyTurn = true;
+        turnSerial++;
         remainingTurnSeconds = turnDurationSeconds;
+        SetPhase(TurnPhase.Aiming);
+
         DemoSkillSelector selector = CurrentCharacter != null ? CurrentCharacter.GetComponent<DemoSkillSelector>() : null;
         selector?.NotifyTurnStarted();
         TurnStarted?.Invoke(CurrentCharacter);
@@ -234,7 +313,47 @@ public class TurnManager : MonoBehaviour
         {
             ObjectHeadTeamMember member = CurrentCharacter.GetComponent<ObjectHeadTeamMember>();
             string label = member != null ? member.DisplayName : CurrentCharacter.name;
-            Debug.Log($"Turn changed to {label}");
+            Debug.Log($"Turn {turnSerial}: {label}");
+        }
+    }
+
+    private void SetPhase(TurnPhase phase)
+    {
+        CurrentPhase = phase;
+
+        if (characters != null)
+        {
+            for (int i = 0; i < characters.Length; i++)
+            {
+                TurnCharacterController character = characters[i];
+                if (character == null)
+                {
+                    continue;
+                }
+
+                bool canMove = character == CurrentCharacter && CanCharacterMove(character);
+                character.SetControlEnabled(canMove);
+
+                if (!canMove)
+                {
+                    character.StopHorizontalMovement();
+                }
+            }
+        }
+
+        TurnPhaseChanged?.Invoke(CurrentPhase);
+    }
+
+    private void AdvanceHazardTurns()
+    {
+#if UNITY_6000_0_OR_NEWER || UNITY_2023_1_OR_NEWER
+        HazardZone[] zones = FindObjectsByType<HazardZone>(FindObjectsSortMode.None);
+#else
+        HazardZone[] zones = FindObjectsOfType<HazardZone>();
+#endif
+        for (int i = 0; i < zones.Length; i++)
+        {
+            zones[i]?.NotifyTurnAdvanced();
         }
     }
 
@@ -290,6 +409,8 @@ public class TurnManager : MonoBehaviour
         isMatchOver = true;
         winningPlayerIndex = playerIndex;
         ClearCurrentTurn();
+        CurrentPhase = TurnPhase.MatchOver;
+        TurnPhaseChanged?.Invoke(CurrentPhase);
         Debug.Log($"Player {playerIndex} wins.");
         MatchEnded?.Invoke(playerIndex);
     }

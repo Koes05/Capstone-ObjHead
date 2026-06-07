@@ -10,29 +10,33 @@ public class HazardZone : MonoBehaviour
 
     private readonly Dictionary<CharacterCombat, float> nextDamageTimes = new Dictionary<CharacterCombat, float>();
     private CharacterCombat owner;
+    private TurnManager turnManager;
     private int damagePerTick;
     private float tickSeconds;
     private float slowMultiplier = 1f;
-    private float remainingSeconds;
+    private int remainingTurns;
     private Color baseColor;
     private SpriteRenderer spriteRenderer;
+
+    public int RemainingTurns => remainingTurns;
 
     public static HazardZone Create(
         Vector2 position,
         float radius,
-        float durationSeconds,
+        int durationTurns,
         int damagePerTick,
         float tickSeconds,
         float slowMultiplier,
         Color color,
-        CharacterCombat owner)
+        CharacterCombat owner,
+        TurnManager manager)
     {
         GameObject zoneObject = new GameObject("HazardZone");
         zoneObject.transform.position = position;
         zoneObject.transform.localScale = Vector3.one * Mathf.Max(0.05f, radius * 2f);
 
         HazardZone zone = zoneObject.AddComponent<HazardZone>();
-        zone.Initialize(durationSeconds, damagePerTick, tickSeconds, slowMultiplier, color, owner);
+        zone.Initialize(durationTurns, damagePerTick, tickSeconds, slowMultiplier, color, owner, manager);
         return zone;
     }
 
@@ -47,13 +51,21 @@ public class HazardZone : MonoBehaviour
         circleCollider.radius = 0.5f;
     }
 
-    public void Initialize(float durationSeconds, int tickDamage, float tickIntervalSeconds, float movementSlowMultiplier, Color color, CharacterCombat zoneOwner)
+    public void Initialize(
+        int durationTurns,
+        int tickDamage,
+        float tickIntervalSeconds,
+        float movementSlowMultiplier,
+        Color color,
+        CharacterCombat zoneOwner,
+        TurnManager manager)
     {
         owner = zoneOwner;
+        turnManager = manager != null ? manager : FindTurnManager();
         damagePerTick = Mathf.Max(0, tickDamage);
         tickSeconds = Mathf.Max(0.1f, tickIntervalSeconds);
         slowMultiplier = Mathf.Clamp(movementSlowMultiplier, 0.1f, 1f);
-        remainingSeconds = Mathf.Max(0.1f, durationSeconds);
+        remainingTurns = Mathf.Max(1, durationTurns);
         baseColor = color;
 
         if (spriteRenderer == null)
@@ -62,20 +74,22 @@ public class HazardZone : MonoBehaviour
         }
 
         spriteRenderer.color = baseColor;
+        Debug.Log($"{name} created with {remainingTurns} turns.");
     }
 
-    private void Update()
+    public void NotifyTurnAdvanced()
     {
-        remainingSeconds -= Time.deltaTime;
+        remainingTurns = Mathf.Max(0, remainingTurns - 1);
+        Debug.Log($"{name} remaining turns: {remainingTurns}");
 
         if (spriteRenderer != null)
         {
             Color color = baseColor;
-            color.a *= Mathf.Clamp01(remainingSeconds / 0.75f);
+            color.a *= remainingTurns > 0 ? Mathf.Clamp01(0.45f + remainingTurns * 0.18f) : 0f;
             spriteRenderer.color = color;
         }
 
-        if (remainingSeconds <= 0f)
+        if (remainingTurns <= 0)
         {
             Destroy(gameObject);
         }
@@ -84,7 +98,7 @@ public class HazardZone : MonoBehaviour
     private void OnTriggerStay2D(Collider2D other)
     {
         CharacterCombat combat = other.GetComponentInParent<CharacterCombat>();
-        if (combat == null || combat == owner || combat.IsDead)
+        if (combat == null || combat == owner || combat.IsDead || !IsCurrentTurnCharacter(combat))
         {
             return;
         }
@@ -112,6 +126,18 @@ public class HazardZone : MonoBehaviour
 
         combat.TakeDamage(damagePerTick);
         nextDamageTimes[combat] = Time.time + tickSeconds;
+    }
+
+    private bool IsCurrentTurnCharacter(CharacterCombat combat)
+    {
+        if (turnManager == null)
+        {
+            turnManager = FindTurnManager();
+        }
+
+        return turnManager != null &&
+               turnManager.CurrentCharacter != null &&
+               turnManager.CurrentCharacter.gameObject == combat.gameObject;
     }
 
     private static Sprite GetCircleSprite()
@@ -142,5 +168,14 @@ public class HazardZone : MonoBehaviour
         circleSprite = Sprite.Create(texture, new Rect(0f, 0f, CircleTextureSize, CircleTextureSize), new Vector2(0.5f, 0.5f), CircleTextureSize);
         circleSprite.hideFlags = HideFlags.HideAndDontSave;
         return circleSprite;
+    }
+
+    private static TurnManager FindTurnManager()
+    {
+#if UNITY_6000_0_OR_NEWER || UNITY_2023_1_OR_NEWER
+        return Object.FindAnyObjectByType<TurnManager>();
+#else
+        return Object.FindObjectOfType<TurnManager>();
+#endif
     }
 }

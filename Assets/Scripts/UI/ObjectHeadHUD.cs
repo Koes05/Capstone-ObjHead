@@ -30,6 +30,8 @@ public class ObjectHeadHUD : MonoBehaviour
         GUILayout.Space(8f);
         DrawSkillInfo();
         GUILayout.Space(8f);
+        DrawCommonHeadSlots();
+        GUILayout.Space(8f);
         DrawTeamInfo();
         if (showHelp)
         {
@@ -66,6 +68,7 @@ public class ObjectHeadHUD : MonoBehaviour
         string playerText = member != null ? $"P{member.PlayerIndex} / Slot {member.TeamSlotIndex}" : current.name;
         string kindText = selector != null ? selector.CharacterKind.ToString() : "Unknown";
         GUILayout.Label($"Turn: {playerText}  {kindText}", labelStyle);
+        GUILayout.Label($"Phase: {turnManager.CurrentPhase}", labelStyle);
         GUILayout.Label($"Time: {Mathf.CeilToInt(turnManager.RemainingTurnSeconds)}s", turnManager.RemainingTurnSeconds <= 5f ? warningStyle : labelStyle);
         DrawHorizontalMeter(turnManager.TurnTime01, new Color(0.25f, 0.85f, 1f, 0.95f), 348f, 8f);
 
@@ -78,6 +81,28 @@ public class ObjectHeadHUD : MonoBehaviour
         {
             GUILayout.Label($"Power: {(power.CurrentPower * 100f):0}%", labelStyle);
             DrawHorizontalMeter(power.CurrentPower, new Color(1f, 0.85f, 0.2f, 0.95f), 348f, 8f);
+        }
+    }
+
+    private void DrawCommonHeadSlots()
+    {
+        if (turnManager == null || turnManager.CurrentCharacter == null)
+        {
+            return;
+        }
+
+        CommonHeadInventory inventory = turnManager.CurrentCharacter.GetComponent<CommonHeadInventory>();
+        if (inventory == null)
+        {
+            return;
+        }
+
+        GUILayout.Label("Common Heads", titleStyle);
+        for (int i = 0; i < 3; i++)
+        {
+            CommonHeadType type = inventory.GetSlot(i);
+            string state = type == CommonHeadType.None ? "Empty" : type.ToString();
+            GUILayout.Label($"{i + 6}: {state}", type == CommonHeadType.None ? warningStyle : labelStyle);
         }
     }
 
@@ -133,8 +158,9 @@ public class ObjectHeadHUD : MonoBehaviour
         GUILayout.Label("Controls", titleStyle);
         GUILayout.Label("A/D move, W jump, mouse aim", labelStyle);
         GUILayout.Label("Space charge/fire, 1/2/3 skill", labelStyle);
-        GUILayout.Label("Tab end turn, I/J/K/L or mouse drag camera", labelStyle);
-        GUILayout.Label("Mouse wheel or +/- zoom, Home reset, O overview", labelStyle);
+        GUILayout.Label("6/7/8 use common head, Tab end turn", labelStyle);
+        GUILayout.Label("O/K/L/; camera, I focus character, P overview", labelStyle);
+        GUILayout.Label("Mouse wheel or +/- zoom, mouse drag camera", labelStyle);
     }
 
     private void DrawHorizontalMeter(float value01, Color fillColor, float width, float height)
