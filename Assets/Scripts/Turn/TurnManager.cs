@@ -300,6 +300,7 @@ public class TurnManager : MonoBehaviour
         if (endingCharacter != null)
         {
             TurnEnded?.Invoke(endingCharacter);
+            endingCharacter.GetComponent<CommonHeadUseController>()?.CancelSelectionAndRestoreUniqueHead();
             endingCharacter.ResetTurnStatus();
         }
 
@@ -480,6 +481,7 @@ public class TurnManager : MonoBehaviour
         {
             if (character != null)
             {
+                character.GetComponent<CommonHeadUseController>()?.CancelSelectionAndRestoreUniqueHead();
                 character.ResetTurnStatus();
                 character.SetControlEnabled(false);
                 character.StopHorizontalMovement();

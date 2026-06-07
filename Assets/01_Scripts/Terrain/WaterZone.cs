@@ -11,6 +11,24 @@ public class WaterZone : MonoBehaviour
         get { return entered; }
     }
 
+    public void ConfigureSurface(float surfaceY, float width, float depth, float topInset)
+    {
+        BoxCollider2D box = GetComponent<BoxCollider2D>();
+        if (box == null)
+        {
+            return;
+        }
+
+        float safeDepth = Mathf.Max(0.1f, depth);
+        float safeInset = Mathf.Max(0f, topInset);
+        box.isTrigger = true;
+        box.size = new Vector2(Mathf.Max(0.1f, width), safeDepth);
+        transform.position = new Vector3(
+            transform.position.x,
+            surfaceY - safeInset - safeDepth * 0.5f,
+            transform.position.z);
+    }
+
     private void Reset()
     {
         Collider2D collider = GetComponent<Collider2D>();

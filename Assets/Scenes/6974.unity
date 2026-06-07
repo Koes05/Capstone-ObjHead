@@ -1636,7 +1636,15 @@ MonoBehaviour:
   pixelsPerUnit: 32
   chunkSizePx: 64
   collisionCellSizePx: 4
+  mapWidthMultiplier: 1.5
   deterministicSpawnSeed: 6974
+  commonHeadSpawnSeed: 6975
+  characterSpritesFaceRightByDefault: 0
+  characterMoveSpeed: 3.5
+  characterJumpForce: 6
+  waterSurfaceY: -7.5
+  terrainWaterContactOffset: 0.05
+  backgroundWaterlineNormalized: 0.166
   addTerrainEditBrush: 1
   cleanupExistingPrototypeScene: 1
 --- !u!1660057539 &9223372036854775807

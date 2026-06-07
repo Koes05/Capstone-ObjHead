@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
+using Action = System.Action;
 using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody2D))]
@@ -20,6 +21,7 @@ public class SkillProjectile : MonoBehaviour
     private float explosionFadeSeconds;
     private float remainingLifetime;
     private bool isCompleted;
+    private bool completionNotified;
     private bool isFlying;
     private Rigidbody2D body;
     private Vector2 lastVelocity;
@@ -28,6 +30,7 @@ public class SkillProjectile : MonoBehaviour
     private bool hasPreviousPosition;
 
     public bool IsFlying => isFlying && !isCompleted;
+    public event Action Resolved;
 
     public void Initialize(
         Vector2 velocity,
@@ -324,7 +327,7 @@ public class SkillProjectile : MonoBehaviour
         for (int i = 0; i < hits.Length; i++)
         {
             CharacterCombat combat = hits[i] != null ? hits[i].GetComponentInParent<CharacterCombat>() : null;
-            if (combat == null || combat.IsDead || !damagedAtThisPoint.Add(combat))
+            if (!DamageSystem.CanDamage(owner, combat) || !damagedAtThisPoint.Add(combat))
             {
                 continue;
             }
@@ -509,6 +512,12 @@ public class SkillProjectile : MonoBehaviour
         if (!isCompleted)
         {
             isCompleted = true;
+        }
+
+        if (!completionNotified)
+        {
+            completionNotified = true;
+            Resolved?.Invoke();
         }
 
         if (turnManager != null)

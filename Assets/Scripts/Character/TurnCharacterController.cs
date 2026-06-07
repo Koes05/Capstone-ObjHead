@@ -26,6 +26,10 @@ public class TurnCharacterController : MonoBehaviour
     [SerializeField] private float groundCheckDistance = 0.08f;
     [SerializeField] private LayerMask groundLayer = ~0;
 
+    [Header("Jet Jump")]
+    [SerializeField, Min(0.02f)] private float jetJumpGroundedStabilitySeconds = 0.12f;
+    [SerializeField, Range(5f, 8f)] private float maxFallDamageImmunitySeconds = 6f;
+
     private readonly RaycastHit2D[] groundHits = new RaycastHit2D[4];
     private Rigidbody2D body;
     private Collider2D bodyCollider;
@@ -42,10 +46,21 @@ public class TurnCharacterController : MonoBehaviour
     private float timedMoveSpeedMultiplier = 1f;
     private float timedMoveSpeedMultiplierTimer;
     private float hazardMoveSpeedMultiplier = 1f;
+    private bool ignoreFallDamageUntilGrounded;
+    private bool leftGroundDuringImmunity;
+    private float fallDamageImmunityRemaining;
+    private float groundedStabilityTimer;
 
     public bool HasControl => hasControl;
     public bool IsGrounded => isGrounded;
     public bool IsTurnAvailable => isActiveAndEnabled && gameObject.activeInHierarchy;
+    public bool IgnoreFallDamageUntilGrounded => ignoreFallDamageUntilGrounded;
+
+    public void ConfigureMovement(float horizontalSpeed, float verticalJumpForce)
+    {
+        moveSpeed = Mathf.Max(0.1f, horizontalSpeed);
+        jumpForce = Mathf.Max(0.1f, verticalJumpForce);
+    }
 
     private void Awake()
     {
@@ -60,6 +75,7 @@ public class TurnCharacterController : MonoBehaviour
         hasControl = false;
         ResetInput();
         ClearHazardSlow();
+        ClearFallDamageImmunity();
     }
 
     private void Update()
@@ -80,6 +96,7 @@ public class TurnCharacterController : MonoBehaviour
     private void FixedUpdate()
     {
         isGrounded = CheckGrounded();
+        UpdateFallDamageImmunity();
         Vector2 velocity = body.linearVelocity;
         bool preserveExternalMotion = ShouldPreserveExternalMotion(velocity);
         bool canUseInput = hasControl && !preserveExternalMotion;
@@ -152,6 +169,22 @@ public class TurnCharacterController : MonoBehaviour
         ResetInput();
     }
 
+    public void BeginJetJumpFallDamageImmunity()
+    {
+        ignoreFallDamageUntilGrounded = true;
+        leftGroundDuringImmunity = !isGrounded;
+        fallDamageImmunityRemaining = Mathf.Clamp(maxFallDamageImmunitySeconds, 5f, 8f);
+        groundedStabilityTimer = 0f;
+    }
+
+    public void ClearFallDamageImmunity()
+    {
+        ignoreFallDamageUntilGrounded = false;
+        leftGroundDuringImmunity = false;
+        fallDamageImmunityRemaining = 0f;
+        groundedStabilityTimer = 0f;
+    }
+
     public void ApplyMoveSpeedMultiplier(float multiplier, float seconds)
     {
         timedMoveSpeedMultiplier = Mathf.Min(timedMoveSpeedMultiplier, Mathf.Clamp(multiplier, 0.1f, 1f));
@@ -174,6 +207,7 @@ public class TurnCharacterController : MonoBehaviour
         timedMoveSpeedMultiplierTimer = 0f;
         hazardMoveSpeedMultiplier = 1f;
         externalMotionTimer = 0f;
+        ClearFallDamageImmunity();
         ResetInput();
     }
 
@@ -301,5 +335,38 @@ public class TurnCharacterController : MonoBehaviour
         filter.SetLayerMask(groundLayer);
         filter.useLayerMask = true;
         return bodyCollider != null && bodyCollider.Cast(Vector2.down, filter, groundHits, groundCheckDistance) > 0;
+    }
+
+    private void UpdateFallDamageImmunity()
+    {
+        if (!ignoreFallDamageUntilGrounded)
+        {
+            return;
+        }
+
+        fallDamageImmunityRemaining = Mathf.Max(0f, fallDamageImmunityRemaining - Time.fixedDeltaTime);
+        if (fallDamageImmunityRemaining <= 0f)
+        {
+            ClearFallDamageImmunity();
+            return;
+        }
+
+        if (!isGrounded)
+        {
+            leftGroundDuringImmunity = true;
+            groundedStabilityTimer = 0f;
+            return;
+        }
+
+        if (!leftGroundDuringImmunity)
+        {
+            return;
+        }
+
+        groundedStabilityTimer += Time.fixedDeltaTime;
+        if (groundedStabilityTimer >= jetJumpGroundedStabilitySeconds)
+        {
+            ClearFallDamageImmunity();
+        }
     }
 }

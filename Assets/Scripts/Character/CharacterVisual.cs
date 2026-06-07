@@ -13,6 +13,7 @@ public class CharacterVisual : MonoBehaviour
 {
     [SerializeField] private ObjectHeadCharacterKind characterKind = ObjectHeadCharacterKind.Bulb;
     [SerializeField, Range(0, 2)] private int selectedSkillIndex;
+    [SerializeField] private bool spriteFacesRightByDefault;
     [SerializeField] private bool hideRootSpriteRenderer = true;
     [SerializeField] private Vector2 bodyLocalOffset = new Vector2(0f, -0.24f);
     [SerializeField] private Vector2 headLocalOffset = new Vector2(0f, 0.34f);
@@ -27,14 +28,19 @@ public class CharacterVisual : MonoBehaviour
     private Sprite bodyThrow;
     private Sprite bodyHit;
     private Sprite[,] headSprites;
+    private Sprite uniqueHeadSprite;
+    private Sprite temporaryCommonHeadSprite;
     private Coroutine temporaryStateRoutine;
     private bool isDead;
+    private bool isHeadHidden;
     private bool isFacingRight = true;
 
     public ObjectHeadCharacterKind CharacterKind => characterKind;
     public int SelectedSkillIndex => selectedSkillIndex;
     public Sprite CurrentHeadSprite => headRenderer != null ? headRenderer.sprite : null;
+    public Sprite UniqueHeadSprite => uniqueHeadSprite;
     public bool IsFacingRight => isFacingRight;
+    public bool SpriteFacesRightByDefault => spriteFacesRightByDefault;
 
     private void Awake()
     {
@@ -58,13 +64,58 @@ public class CharacterVisual : MonoBehaviour
     {
         characterKind = kind;
         selectedSkillIndex = Mathf.Clamp(selectedSkillIndex, 0, 2);
+        uniqueHeadSprite = GetSelectedHeadSprite();
         ApplyVisualState();
     }
 
     public void SetSkillIndex(int index)
     {
         selectedSkillIndex = Mathf.Clamp(index, 0, 2);
+        uniqueHeadSprite = GetSelectedHeadSprite();
         ApplyVisualState();
+    }
+
+    public void ConfigureSpriteFacing(bool facesRightByDefault)
+    {
+        spriteFacesRightByDefault = facesRightByDefault;
+        ApplyFacing();
+    }
+
+    public void SetUniqueHead(Sprite sprite)
+    {
+        uniqueHeadSprite = sprite != null ? sprite : GetSelectedHeadSprite();
+        if (temporaryCommonHeadSprite == null)
+        {
+            RefreshHeadSprite();
+        }
+    }
+
+    public void SetTemporaryCommonHead(Sprite sprite)
+    {
+        if (sprite == null)
+        {
+            return;
+        }
+
+        temporaryCommonHeadSprite = sprite;
+        RefreshHeadSprite();
+    }
+
+    public void RestoreUniqueHead()
+    {
+        temporaryCommonHeadSprite = null;
+        RefreshHeadSprite();
+        ShowHeadAfterAction();
+    }
+
+    public void HideHeadForThrow()
+    {
+        SetHeadVisible(false);
+    }
+
+    public void ShowHeadAfterAction()
+    {
+        SetHeadVisible(true);
     }
 
     public void PlayThrowPose(float seconds)
@@ -136,6 +187,7 @@ public class CharacterVisual : MonoBehaviour
 
         bodyRenderer = GetOrCreateChildRenderer("BodyRenderer", bodySortingOrder);
         headRenderer = GetOrCreateChildRenderer("HeadRenderer", headSortingOrder);
+        uniqueHeadSprite = GetSelectedHeadSprite();
         ApplyFacing();
     }
 
@@ -184,7 +236,11 @@ public class CharacterVisual : MonoBehaviour
         }
 
         SetBodySprite(isDead ? bodyHit : bodyIdle);
-        headRenderer.sprite = GetSelectedHeadSprite();
+        if (uniqueHeadSprite == null)
+        {
+            uniqueHeadSprite = GetSelectedHeadSprite();
+        }
+        RefreshHeadSprite();
         bodyRenderer.transform.localPosition = bodyLocalOffset;
         headRenderer.transform.localPosition = headLocalOffset;
         bodyRenderer.transform.localScale = Vector3.one * bodyScale;
@@ -192,12 +248,12 @@ public class CharacterVisual : MonoBehaviour
         bodyRenderer.sortingOrder = bodySortingOrder;
         headRenderer.sortingOrder = headSortingOrder;
         ApplyFacing();
-        SetHeadVisible(true);
+        SetHeadVisible(!isHeadHidden);
     }
 
     private void ApplyFacing()
     {
-        bool flip = !isFacingRight;
+        bool flip = isFacingRight != spriteFacesRightByDefault;
         if (bodyRenderer != null)
         {
             bodyRenderer.flipX = flip;
@@ -216,6 +272,22 @@ public class CharacterVisual : MonoBehaviour
             : null;
     }
 
+    private void RefreshHeadSprite()
+    {
+        if (headRenderer == null)
+        {
+            return;
+        }
+
+        headRenderer.sprite = temporaryCommonHeadSprite != null
+            ? temporaryCommonHeadSprite
+            : uniqueHeadSprite != null
+                ? uniqueHeadSprite
+                : GetSelectedHeadSprite();
+        headRenderer.enabled = !isHeadHidden && headRenderer.sprite != null;
+        ApplyFacing();
+    }
+
     private void SetBodySprite(Sprite sprite)
     {
         if (bodyRenderer != null)
@@ -226,6 +298,7 @@ public class CharacterVisual : MonoBehaviour
 
     private void SetHeadVisible(bool visible)
     {
+        isHeadHidden = !visible;
         if (headRenderer != null)
         {
             headRenderer.enabled = visible && headRenderer.sprite != null;

@@ -100,6 +100,7 @@ public class DemoSkillSelector : MonoBehaviour
     private readonly int[] remainingCooldowns = new int[3];
     private CharacterVisual characterVisual;
     private TurnCharacterController turnCharacter;
+    private CommonHeadUseController commonHeadUseController;
 
     public ObjectHeadCharacterKind CharacterKind => characterKind;
     public int SelectedSkillIndex => selectedSkillIndex;
@@ -108,6 +109,7 @@ public class DemoSkillSelector : MonoBehaviour
     {
         characterVisual = GetComponent<CharacterVisual>();
         turnCharacter = GetComponent<TurnCharacterController>();
+        commonHeadUseController = GetComponent<CommonHeadUseController>();
         ApplySelection();
     }
 
@@ -129,12 +131,14 @@ public class DemoSkillSelector : MonoBehaviour
 
     public void SetCharacterKind(ObjectHeadCharacterKind kind)
     {
+        CancelCommonHeadSelection();
         characterKind = kind;
         ApplySelection();
     }
 
     public void SetSkillIndex(int index)
     {
+        CancelCommonHeadSelection();
         selectedSkillIndex = Mathf.Clamp(index, 0, 2);
         ApplySelection();
     }
@@ -212,7 +216,7 @@ public class DemoSkillSelector : MonoBehaviour
         if (selectedSkillIndex == 0)
         {
             settings.effectType = SkillEffectType.CreateHazardZone;
-            settings.maxDamage = 0;
+            settings.maxDamage = 5;
             settings.explosionRadiusWorld = 0.7f;
             settings.knockbackForce = 0f;
             settings.zoneDamagePerTurn = 8;
@@ -282,7 +286,7 @@ public class DemoSkillSelector : MonoBehaviour
         }
 
         settings.effectType = SkillEffectType.CreateHazardZone;
-        settings.maxDamage = 0;
+        settings.maxDamage = 10;
         settings.explosionRadiusWorld = 0.8f;
         settings.zoneDamagePerTurn = 12;
         settings.zoneDurationRounds = 2;
@@ -358,6 +362,16 @@ public class DemoSkillSelector : MonoBehaviour
                 return;
             }
         }
+    }
+
+    private void CancelCommonHeadSelection()
+    {
+        if (commonHeadUseController == null)
+        {
+            commonHeadUseController = GetComponent<CommonHeadUseController>();
+        }
+
+        commonHeadUseController?.CancelSelectionAndRestoreUniqueHead();
     }
 
     private void ReadSelectionInput()

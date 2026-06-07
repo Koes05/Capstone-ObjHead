@@ -20,6 +20,8 @@ public class AimController : MonoBehaviour
     [SerializeField, Min(1f)] private float rotateSpeedDegrees = 120f;
     [SerializeField, Range(0f, 180f)] private float sideAngleDegrees = 90f;
     [SerializeField] private bool startsFacingRight = true;
+    [SerializeField] private bool upperHemisphereOnly;
+    [SerializeField, Range(0f, 0.95f)] private float minimumUpwardDirection = 0.2f;
 
     [Header("Visual")]
     [SerializeField, Min(0.01f)] private float targetingScale = 0.18f;
@@ -39,10 +41,12 @@ public class AimController : MonoBehaviour
     private SpriteRenderer chargingRenderer;
     private SpriteMask chargingMask;
     private static Sprite maskSprite;
+    private static Sprite fallbackTargetingSprite;
+    private static Sprite fallbackChargingSprite;
 
     public float ChargePower => chargePower;
     public Vector2 AimOrigin => (Vector2)transform.position + originOffset;
-    public Vector2 AimDirection => DirectionFromAngle(WorldAngleDegrees);
+    public Vector2 AimDirection => GetConstrainedAimDirection();
     public Vector2 TargetPosition => AimOrigin + AimDirection * aimRadius;
     public Vector2 ChargingPosition => AimOrigin + AimDirection * chargingRadius;
     public float WorldAngleDegrees => sideSign >= 0
@@ -55,7 +59,7 @@ public class AimController : MonoBehaviour
         characterVisual = GetComponent<CharacterVisual>();
         sideSign = startsFacingRight ? 1 : -1;
         characterVisual?.SetFacingRight(sideSign > 0);
-        LoadDefaultSpritesInEditor();
+        LoadDefaultSprites();
         BuildVisuals();
         SetChargePower(0f);
     }
@@ -85,6 +89,12 @@ public class AimController : MonoBehaviour
             sideSign = x >= 0f ? 1 : -1;
             characterVisual?.SetFacingRight(sideSign > 0);
         }
+    }
+
+    public void SetUpperHemisphereOnly(bool enabled, float minimumY = 0.2f)
+    {
+        upperHemisphereOnly = enabled;
+        minimumUpwardDirection = Mathf.Clamp(minimumY, 0f, 0.95f);
     }
 
     private void ReadAimInput()
@@ -219,6 +229,18 @@ public class AimController : MonoBehaviour
         return new Vector2(Mathf.Cos(radians), Mathf.Sin(radians)).normalized;
     }
 
+    private Vector2 GetConstrainedAimDirection()
+    {
+        Vector2 direction = DirectionFromAngle(WorldAngleDegrees);
+        if (!upperHemisphereOnly)
+        {
+            return direction;
+        }
+
+        direction.y = Mathf.Max(minimumUpwardDirection, direction.y);
+        return direction.normalized;
+    }
+
     private static Sprite GetMaskSprite()
     {
         if (maskSprite != null)
@@ -235,18 +257,132 @@ public class AimController : MonoBehaviour
         return maskSprite;
     }
 
-    private void LoadDefaultSpritesInEditor()
+    private void LoadDefaultSprites()
     {
-#if UNITY_EDITOR
         if (targetingSprite == null)
         {
-            targetingSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/Resources/Sprites/UI/targeting.png");
+            targetingSprite = Resources.Load<Sprite>("Sprites/UI/targeting");
         }
 
         if (chargingSprite == null)
         {
-            chargingSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/Resources/Sprites/UI/charging.png");
+            chargingSprite = Resources.Load<Sprite>("Sprites/UI/charging");
+        }
+
+#if UNITY_EDITOR
+        if (targetingSprite == null)
+        {
+            targetingSprite = LoadFirstSpriteAtPath("Assets/서준호 이미지/타게팅.png");
+        }
+
+        if (chargingSprite == null)
+        {
+            chargingSprite = LoadFirstSpriteAtPath("Assets/서준호 이미지/차징.png");
         }
 #endif
+
+        if (targetingSprite == null)
+        {
+            targetingSprite = GetFallbackTargetingSprite();
+        }
+
+        if (chargingSprite == null)
+        {
+            chargingSprite = GetFallbackChargingSprite();
+        }
+    }
+
+#if UNITY_EDITOR
+    private static Sprite LoadFirstSpriteAtPath(string assetPath)
+    {
+        Object[] assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
+        for (int i = 0; i < assets.Length; i++)
+        {
+            if (assets[i] is Sprite sprite)
+            {
+                return sprite;
+            }
+        }
+
+        return null;
+    }
+#endif
+
+    private static Sprite GetFallbackTargetingSprite()
+    {
+        if (fallbackTargetingSprite != null)
+        {
+            return fallbackTargetingSprite;
+        }
+
+        const int size = 128;
+        Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        Color32[] pixels = new Color32[size * size];
+        Color32 color = new Color32(255, 70, 45, 255);
+        Vector2 center = new Vector2((size - 1) * 0.5f, (size - 1) * 0.5f);
+
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                Vector2 offset = new Vector2(x, y) - center;
+                float distance = offset.magnitude;
+                bool ring = distance >= 40f && distance <= 47f;
+                bool horizontal = Mathf.Abs(offset.y) <= 3f && Mathf.Abs(offset.x) >= 30f;
+                bool vertical = Mathf.Abs(offset.x) <= 3f && Mathf.Abs(offset.y) >= 30f;
+                pixels[y * size + x] = ring || horizontal || vertical ? color : new Color32(0, 0, 0, 0);
+            }
+        }
+
+        texture.SetPixels32(pixels);
+        texture.Apply(false);
+        texture.filterMode = FilterMode.Bilinear;
+        texture.hideFlags = HideFlags.HideAndDontSave;
+        fallbackTargetingSprite = Sprite.Create(
+            texture,
+            new Rect(0f, 0f, size, size),
+            new Vector2(0.5f, 0.5f),
+            18f);
+        fallbackTargetingSprite.hideFlags = HideFlags.HideAndDontSave;
+        return fallbackTargetingSprite;
+    }
+
+    private static Sprite GetFallbackChargingSprite()
+    {
+        if (fallbackChargingSprite != null)
+        {
+            return fallbackChargingSprite;
+        }
+
+        const int width = 48;
+        const int height = 128;
+        Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
+        Color32[] pixels = new Color32[width * height];
+
+        for (int y = 0; y < height; y++)
+        {
+            float t = y / (float)(height - 1);
+            Color color = Color.Lerp(new Color(1f, 0.18f, 0.1f, 1f), new Color(1f, 0.95f, 0.1f, 1f), t);
+            float halfWidth = Mathf.Lerp(5f, width * 0.48f, t);
+            for (int x = 0; x < width; x++)
+            {
+                float distanceFromCenter = Mathf.Abs(x - (width - 1) * 0.5f);
+                pixels[y * width + x] = distanceFromCenter <= halfWidth
+                    ? (Color32)color
+                    : new Color32(0, 0, 0, 0);
+            }
+        }
+
+        texture.SetPixels32(pixels);
+        texture.Apply(false);
+        texture.filterMode = FilterMode.Bilinear;
+        texture.hideFlags = HideFlags.HideAndDontSave;
+        fallbackChargingSprite = Sprite.Create(
+            texture,
+            new Rect(0f, 0f, width, height),
+            new Vector2(0.5f, 0.5f),
+            16f);
+        fallbackChargingSprite.hideFlags = HideFlags.HideAndDontSave;
+        return fallbackChargingSprite;
     }
 }

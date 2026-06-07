@@ -7,7 +7,7 @@ public class SkillFireController : MonoBehaviour
     [SerializeField, Min(0.05f)] private float projectileRadius = 0.18f;
     [FormerlySerializedAs("spawnDistanceFromTarget")]
     [SerializeField, Min(0f)] private float spawnDistanceFromCharacter = 0.7f;
-    [SerializeField, Min(0.1f)] private float minLaunchSpeed = 5f;
+    [SerializeField, Min(0.1f)] private float minLaunchSpeed = 3.5f;
     [SerializeField, Min(0.1f)] private float maxLaunchSpeed = 13f;
     [SerializeField, Min(0f)] private float projectileGravityScale = 1f;
     [SerializeField, Min(0.1f)] private float projectileLifetime = 8f;
@@ -26,6 +26,7 @@ public class SkillFireController : MonoBehaviour
     private PowerChargeController powerChargeController;
     private CharacterVisual characterVisual;
     private DemoSkillSelector skillSelector;
+    private CommonHeadUseController commonHeadUseController;
     private TurnManager turnManager;
     private bool hasFiredThisTurn;
     private int observedTurnSerial = -1;
@@ -38,6 +39,7 @@ public class SkillFireController : MonoBehaviour
         powerChargeController = GetComponent<PowerChargeController>();
         characterVisual = GetComponent<CharacterVisual>();
         skillSelector = GetComponent<DemoSkillSelector>();
+        commonHeadUseController = GetComponent<CommonHeadUseController>();
         turnManager = FindTurnManager();
     }
 
@@ -54,9 +56,15 @@ public class SkillFireController : MonoBehaviour
             hasFiredThisTurn = false;
         }
 
+        if (commonHeadUseController == null)
+        {
+            commonHeadUseController = GetComponent<CommonHeadUseController>();
+        }
+
         if (turnCharacter == null ||
             powerChargeController == null ||
             hasFiredThisTurn ||
+            (commonHeadUseController != null && commonHeadUseController.HasSelectedCommonHead) ||
             turnManager == null ||
             !turnManager.CanCharacterFire(turnCharacter))
         {

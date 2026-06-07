@@ -17,6 +17,7 @@ public class TerrainManager : MonoBehaviour
     [Header("Coordinates")]
     [SerializeField] private Vector2 terrainOriginWorld = Vector2.zero;
     [SerializeField] private int pixelsPerUnit = 32;
+    [SerializeField, Range(1f, 2.5f)] private float horizontalExpansion = 1f;
 
     [Header("Collision")]
     [SerializeField] private int chunkSizePx = 64;
@@ -24,6 +25,7 @@ public class TerrainManager : MonoBehaviour
     [SerializeField, Range(0f, 1f)] private float collisionSolidRatioThreshold = 0.4f;
     [FormerlySerializedAs("alphaThreshold")]
     [SerializeField, Range(0f, 1f)] private float maskAlphaThreshold = 0.1f;
+    [SerializeField] private bool mergeVisibleTerrainIntoCollision = true;
     [SerializeField] private bool buildCollidersOnStart = true;
 
     [Header("Terrain Rules")]
@@ -53,10 +55,73 @@ public class TerrainManager : MonoBehaviour
         ? runtimeVisualTexture.height
         : visualSourceTexture != null ? visualSourceTexture.height : 0;
     public int PixelsPerUnit => Mathf.Max(1, pixelsPerUnit);
+    public float HorizontalExpansion => Mathf.Max(1f, horizontalExpansion);
     public Vector2 TerrainOriginWorld => terrainOriginWorld;
     public bool IsInitialized => initialized;
     public Texture2D RuntimeVisualTexture => runtimeVisualTexture;
     public Texture2D RuntimeCollisionTexture => runtimeCollisionTexture;
+
+    public Bounds GetTerrainBounds()
+    {
+        float width = WidthPx / (float)PixelsPerUnit;
+        float height = HeightPx / (float)PixelsPerUnit;
+        Vector3 center = new Vector3(
+            terrainOriginWorld.x + width * 0.5f,
+            terrainOriginWorld.y + height * 0.5f,
+            0f);
+        return new Bounds(center, new Vector3(width, height, 0f));
+    }
+
+    public bool TryGetLowestSolidWorldY(out float lowestWorldY)
+    {
+        lowestWorldY = terrainOriginWorld.y;
+        if (!EnsureInitialized())
+        {
+            return false;
+        }
+
+        for (int y = 0; y < HeightPx; y++)
+        {
+            for (int x = 0; x < WidthPx; x++)
+            {
+                if (!solidMask[x, y])
+                {
+                    continue;
+                }
+
+                lowestWorldY = terrainOriginWorld.y + y / (float)PixelsPerUnit;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public void SetTerrainOriginWorld(Vector2 originWorld)
+    {
+        terrainOriginWorld = originWorld;
+
+        if (terrainRenderer != null)
+        {
+            Vector3 rendererPosition = terrainRenderer.transform.position;
+            terrainRenderer.transform.position =
+                new Vector3(originWorld.x, originWorld.y, rendererPosition.z);
+        }
+
+        if (chunkRoot != null)
+        {
+            if (terrainRenderer != null && chunkRoot.IsChildOf(terrainRenderer.transform))
+            {
+                Vector3 localPosition = chunkRoot.localPosition;
+                chunkRoot.localPosition = new Vector3(0f, 0f, localPosition.z);
+            }
+            else
+            {
+                Vector3 chunkPosition = chunkRoot.position;
+                chunkRoot.position = new Vector3(originWorld.x, originWorld.y, chunkPosition.z);
+            }
+        }
+    }
 
     private void Reset()
     {
@@ -93,6 +158,29 @@ public class TerrainManager : MonoBehaviour
         int chunkSize,
         int collisionCellSize)
     {
+        Configure(
+            terrainVisualTexture,
+            terrainCollisionMask,
+            renderer,
+            terrainChunkRoot,
+            originWorld,
+            ppu,
+            chunkSize,
+            collisionCellSize,
+            1f);
+    }
+
+    public void Configure(
+        Texture2D terrainVisualTexture,
+        Texture2D terrainCollisionMask,
+        SpriteRenderer renderer,
+        Transform terrainChunkRoot,
+        Vector2 originWorld,
+        int ppu,
+        int chunkSize,
+        int collisionCellSize,
+        float horizontalScale)
+    {
         visualSourceTexture = terrainVisualTexture;
         collisionMaskTexture = terrainCollisionMask;
         terrainRenderer = renderer;
@@ -101,6 +189,7 @@ public class TerrainManager : MonoBehaviour
         pixelsPerUnit = Mathf.Max(1, ppu);
         chunkSizePx = Mathf.Max(1, chunkSize);
         collisionCellSizePx = NormalizeCollisionCellSize(collisionCellSize);
+        horizontalExpansion = Mathf.Clamp(horizontalScale, 1f, 2.5f);
         InitializeTerrain();
     }
 
@@ -125,12 +214,16 @@ public class TerrainManager : MonoBehaviour
             terrainRenderer = GetComponent<SpriteRenderer>();
         }
 
-        runtimeVisualTexture = CreateReadableRuntimeTexture(visualSourceTexture);
+        runtimeVisualTexture = CreateHorizontallyExpandedRuntimeTexture(
+            visualSourceTexture,
+            HorizontalExpansion);
         runtimeVisualTexture.name = visualSourceTexture.name + "_RuntimeVisual";
         runtimeVisualTexture.filterMode = FilterMode.Point;
         runtimeVisualTexture.wrapMode = TextureWrapMode.Clamp;
 
-        runtimeCollisionTexture = CreateReadableRuntimeTexture(maskSource != null ? maskSource : visualSourceTexture);
+        runtimeCollisionTexture = CreateHorizontallyExpandedRuntimeTexture(
+            maskSource != null ? maskSource : visualSourceTexture,
+            HorizontalExpansion);
         runtimeCollisionTexture.name = (maskSource != null ? maskSource.name : visualSourceTexture.name) + "_RuntimeCollision";
         runtimeCollisionTexture.filterMode = FilterMode.Point;
         runtimeCollisionTexture.wrapMode = TextureWrapMode.Clamp;
@@ -180,6 +273,107 @@ public class TerrainManager : MonoBehaviour
 
         Vector2Int pixel = WorldToPixel(worldPosition);
         return IsPixelInBounds(pixel) && solidMask[pixel.x, pixel.y];
+    }
+
+    public bool FindTerrainSurface(float worldX, out Vector2 surfaceWorld)
+    {
+        surfaceWorld = Vector2.zero;
+        if (!EnsureInitialized())
+        {
+            return false;
+        }
+
+        Vector2Int pixel = WorldToPixel(new Vector2(worldX, terrainOriginWorld.y));
+        if (pixel.x < 0 || pixel.x >= WidthPx)
+        {
+            return false;
+        }
+
+        for (int y = HeightPx - 2; y >= 0; y--)
+        {
+            Vector2 solidPoint = PixelToWorld(new Vector2Int(pixel.x, y));
+            Vector2 abovePoint = PixelToWorld(new Vector2Int(pixel.x, y + 1));
+            if (IsSolidWorld(solidPoint) && !IsSolidWorld(abovePoint))
+            {
+                surfaceWorld = abovePoint;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public bool FindValidCharacterSpawn(
+        TerrainCharacterSpawnRequest request,
+        System.Random random,
+        out Vector2 spawnWorld)
+    {
+        spawnWorld = Vector2.zero;
+        if (!EnsureInitialized() || random == null)
+        {
+            return false;
+        }
+
+        float minX = Mathf.Min(request.minWorldX, request.maxWorldX);
+        float maxX = Mathf.Max(request.minWorldX, request.maxWorldX);
+        int attempts = Mathf.Max(1, request.randomAttempts);
+        for (int attempt = 0; attempt < attempts; attempt++)
+        {
+            float x = Mathf.Lerp(minX, maxX, (float)random.NextDouble());
+            if (TryBuildCharacterSpawnAtX(request, x, out spawnWorld))
+            {
+                return true;
+            }
+        }
+
+        const int scanSteps = 60;
+        for (int step = 0; step <= scanSteps; step++)
+        {
+            float x = Mathf.Lerp(minX, maxX, step / (float)scanSteps);
+            if (TryBuildCharacterSpawnAtX(request, x, out spawnWorld))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public bool FindValidItemSpawn(
+        TerrainItemSpawnRequest request,
+        System.Random random,
+        out Vector2 spawnWorld)
+    {
+        spawnWorld = Vector2.zero;
+        if (!EnsureInitialized() || random == null)
+        {
+            return false;
+        }
+
+        float minX = Mathf.Min(request.minWorldX, request.maxWorldX);
+        float maxX = Mathf.Max(request.minWorldX, request.maxWorldX);
+        int attempts = Mathf.Max(1, request.randomAttempts);
+        for (int attempt = 0; attempt < attempts; attempt++)
+        {
+            float x = Mathf.Lerp(minX, maxX, (float)random.NextDouble());
+            if (!FindTerrainSurface(x, out Vector2 surface))
+            {
+                continue;
+            }
+
+            float height = Mathf.Lerp(
+                Mathf.Max(0.05f, request.minimumHeightAboveSurface),
+                Mathf.Max(request.minimumHeightAboveSurface, request.maximumHeightAboveSurface),
+                (float)random.NextDouble());
+            Vector2 candidate = new Vector2(x, surface.y + height);
+            if (IsValidItemSpawnCandidate(request, candidate, surface.y))
+            {
+                spawnWorld = candidate;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public TerrainType GetTerrainTypeWorld(Vector2 worldPosition)
@@ -478,14 +672,23 @@ public class TerrainManager : MonoBehaviour
         solidMask = new bool[width, height];
         terrainTypeMask = new TerrainType[width, height];
         Color32[] collisionPixels = runtimeCollisionTexture.GetPixels32();
+        Color32[] visualPixels = runtimeVisualTexture.GetPixels32();
         int alphaCutoff = Mathf.RoundToInt(maskAlphaThreshold * 255f);
+        bool collisionTextureChanged = false;
 
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
             {
-                Color32 pixel = collisionPixels[y * width + x];
-                if (pixel.a <= alphaCutoff)
+                int pixelIndex = y * width + x;
+                Color32 collisionPixel = collisionPixels[pixelIndex];
+                Color32 visualPixel = visualPixels[pixelIndex];
+                bool collisionSolid = collisionPixel.a > alphaCutoff;
+                bool visibleTerrainSolid =
+                    mergeVisibleTerrainIntoCollision &&
+                    visualPixel.a > alphaCutoff;
+
+                if (!collisionSolid && !visibleTerrainSolid)
                 {
                     solidMask[x, y] = false;
                     terrainTypeMask[x, y] = TerrainType.Empty;
@@ -493,10 +696,23 @@ public class TerrainManager : MonoBehaviour
                 }
 
                 solidMask[x, y] = true;
-                terrainTypeMask[x, y] = useIndestructibleTerrain && IsIndestructibleColor(pixel)
+                terrainTypeMask[x, y] = useIndestructibleTerrain &&
+                    IsIndestructibleColor(collisionSolid ? collisionPixel : visualPixel)
                     ? TerrainType.Indestructible
                     : TerrainType.Base;
+
+                if (!collisionSolid && visibleTerrainSolid)
+                {
+                    runtimeCollisionTexture.SetPixel(x, y, Color.white);
+                    collisionTextureChanged = true;
+                }
             }
+        }
+
+        if (collisionTextureChanged)
+        {
+            runtimeCollisionTexture.Apply(false);
+            Debug.Log("Visible terrain pixels missing from the collision mask were merged as destructible solid terrain.");
         }
     }
 
@@ -519,6 +735,42 @@ public class TerrainManager : MonoBehaviour
         RenderTexture.active = previous;
         RenderTexture.ReleaseTemporary(temporary);
         return copy;
+    }
+
+    private static Texture2D CreateHorizontallyExpandedRuntimeTexture(
+        Texture2D texture,
+        float horizontalScale)
+    {
+        Texture2D readable = CreateReadableRuntimeTexture(texture);
+        int targetWidth = Mathf.Max(1, Mathf.RoundToInt(readable.width * Mathf.Max(1f, horizontalScale)));
+        if (targetWidth == readable.width)
+        {
+            return readable;
+        }
+
+        Texture2D expanded = new Texture2D(targetWidth, readable.height, TextureFormat.RGBA32, false);
+        Color32[] sourcePixels = readable.GetPixels32();
+        Color32[] expandedPixels = new Color32[targetWidth * readable.height];
+
+        for (int y = 0; y < readable.height; y++)
+        {
+            int sourceRow = y * readable.width;
+            int targetRow = y * targetWidth;
+            for (int x = 0; x < targetWidth; x++)
+            {
+                int sourceX = Mathf.Clamp(
+                    Mathf.FloorToInt((x + 0.5f) * readable.width / targetWidth),
+                    0,
+                    readable.width - 1);
+                expandedPixels[targetRow + x] = sourcePixels[sourceRow + sourceX];
+            }
+        }
+
+        expanded.SetPixels32(expandedPixels);
+        expanded.Apply(false);
+        if (Application.isPlaying) Destroy(readable);
+        else DestroyImmediate(readable);
+        return expanded;
     }
 
     private static bool IsIndestructibleColor(Color32 color)
@@ -615,6 +867,116 @@ public class TerrainManager : MonoBehaviour
         }
     }
 
+    private bool TryBuildCharacterSpawnAtX(
+        TerrainCharacterSpawnRequest request,
+        float worldX,
+        out Vector2 spawnWorld)
+    {
+        spawnWorld = Vector2.zero;
+        if (!FindTerrainSurface(worldX, out Vector2 surface))
+        {
+            return false;
+        }
+
+        Vector2 extents = new Vector2(
+            Mathf.Max(0.1f, request.colliderExtents.x),
+            Mathf.Max(0.1f, request.colliderExtents.y));
+        Vector2 candidate = new Vector2(
+            worldX,
+            surface.y + extents.y + Mathf.Clamp(request.spawnLiftWorld, 0.03f, 0.1f));
+
+        if (candidate.y <= terrainOriginWorld.y + Mathf.Max(0f, request.waterPaddingWorld) ||
+            !HasStableSurface(worldX, extents.x + 0.12f, request.maximumSurfaceHeightDifference) ||
+            !IsTerrainAreaClear(candidate, extents, request.clearanceSampleStepWorld) ||
+            IsExcluded(candidate, request.exclusions))
+        {
+            return false;
+        }
+
+        spawnWorld = candidate;
+        return true;
+    }
+
+    private bool IsValidItemSpawnCandidate(
+        TerrainItemSpawnRequest request,
+        Vector2 candidate,
+        float surfaceY)
+    {
+        Vector2 extents = new Vector2(
+            Mathf.Max(0.1f, request.halfExtents.x),
+            Mathf.Max(0.1f, request.halfExtents.y));
+        if (surfaceY <= terrainOriginWorld.y + Mathf.Max(0f, request.waterPaddingWorld) ||
+            !HasStableSurface(candidate.x, extents.x + 0.08f, request.maximumSurfaceHeightDifference) ||
+            !IsTerrainAreaClear(candidate, extents, request.clearanceSampleStepWorld) ||
+            IsExcluded(candidate, request.exclusions))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool HasStableSurface(float centerX, float halfWidth, float maximumHeightDifference)
+    {
+        float minY = float.PositiveInfinity;
+        float maxY = float.NegativeInfinity;
+        const int sampleCount = 5;
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float x = centerX + Mathf.Lerp(-halfWidth, halfWidth, i / (float)(sampleCount - 1));
+            if (!FindTerrainSurface(x, out Vector2 surface))
+            {
+                return false;
+            }
+
+            minY = Mathf.Min(minY, surface.y);
+            maxY = Mathf.Max(maxY, surface.y);
+        }
+
+        return maxY - minY <= Mathf.Max(0.05f, maximumHeightDifference);
+    }
+
+    private bool IsTerrainAreaClear(Vector2 center, Vector2 extents, float sampleStep)
+    {
+        float step = Mathf.Max(0.08f, sampleStep);
+        float left = center.x - extents.x;
+        float right = center.x + extents.x;
+        float bottom = center.y - extents.y + 0.02f;
+        float top = center.y + extents.y;
+
+        for (float y = bottom; y <= top + 0.001f; y += step)
+        {
+            for (float x = left; x <= right + 0.001f; x += step)
+            {
+                if (IsSolidWorld(new Vector2(x, y)))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsExcluded(Vector2 candidate, List<TerrainSpawnExclusion> exclusions)
+    {
+        if (exclusions == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < exclusions.Count; i++)
+        {
+            float distance = Mathf.Max(0f, exclusions[i].minimumDistance);
+            if ((candidate - exclusions[i].position).sqrMagnitude < distance * distance)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void MarkDirtyPixelAndNeighbors(int x, int y)
     {
         MarkDirtyChunkAtPixel(x, y);
@@ -666,6 +1028,7 @@ public class TerrainManager : MonoBehaviour
     private void OnValidate()
     {
         pixelsPerUnit = Mathf.Max(1, pixelsPerUnit);
+        horizontalExpansion = Mathf.Clamp(horizontalExpansion, 1f, 2.5f);
         chunkSizePx = Mathf.Max(1, chunkSizePx);
         collisionCellSizePx = NormalizeCollisionCellSize(collisionCellSizePx);
         collisionSolidRatioThreshold = Mathf.Clamp01(collisionSolidRatioThreshold);

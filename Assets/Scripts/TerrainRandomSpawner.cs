@@ -4,18 +4,35 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class TerrainRandomSpawner : MonoBehaviour
 {
+    private struct PlacedCharacter
+    {
+        public int playerIndex;
+        public Vector2 position;
+
+        public PlacedCharacter(int player, Vector2 worldPosition)
+        {
+            playerIndex = player;
+            position = worldPosition;
+        }
+    }
+
     [SerializeField] private TerrainManager terrain;
     [SerializeField] private TurnCharacterController[] characters = new TurnCharacterController[0];
     [SerializeField] private int deterministicSeed = 6974;
     [SerializeField, Min(0f)] private float mapEdgePaddingWorld = 2.5f;
     [SerializeField, Min(0f)] private float waterPaddingWorld = 1.5f;
-    [SerializeField, Min(0f)] private float minCharacterSpacingWorld = 2.5f;
-    [SerializeField, Min(0f)] private float spawnLiftWorld = 0.12f;
-    [SerializeField, Min(0.05f)] private float clearanceSampleStepWorld = 0.2f;
+    [SerializeField, Min(0f)] private float sameTeamMinimumDistance = 2f;
+    [SerializeField, Min(0f)] private float sameTeamAnchorSearchMinimum = 3f;
+    [SerializeField, Min(0f)] private float sameTeamAnchorSearchMaximum = 5f;
+    [SerializeField, Min(0f)] private float sameTeamMaximumDistance = 6f;
+    [SerializeField, Min(0f)] private float enemyMinimumDistance = 6f;
+    [SerializeField, Min(0.03f)] private float spawnLiftWorld = 0.06f;
+    [SerializeField, Min(0.05f)] private float clearanceSampleStepWorld = 0.18f;
     [SerializeField, Min(0.05f)] private float maximumSurfaceHeightDifference = 0.45f;
-    [SerializeField, Min(1)] private int maxAttemptsPerCharacter = 120;
+    [SerializeField, Min(1)] private int maxAttemptsPerCharacter = 140;
 
-    private readonly List<Vector2> usedSpawnPositions = new List<Vector2>();
+    private readonly List<PlacedCharacter> placedCharacters = new List<PlacedCharacter>();
+    private readonly Dictionary<int, Vector2> teamAnchors = new Dictionary<int, Vector2>();
     private System.Random random;
     private bool spawned;
 
@@ -44,9 +61,237 @@ public class TerrainRandomSpawner : MonoBehaviour
         }
 
         random = new System.Random(deterministicSeed);
-        usedSpawnPositions.Clear();
-        int playerCount = GetPlayerCount();
+        placedCharacters.Clear();
+        teamAnchors.Clear();
 
+        SortedDictionary<int, List<TurnCharacterController>> teams = BuildTeams();
+        int playerCount = Mathf.Max(1, teams.Count);
+        int playerOrder = 0;
+
+        foreach (KeyValuePair<int, List<TurnCharacterController>> pair in teams)
+        {
+            int playerIndex = pair.Key;
+            List<TurnCharacterController> team = pair.Value;
+            team.Sort(CompareTeamSlot);
+            GetPlayerRegion(playerOrder, playerCount, out float regionMinX, out float regionMaxX);
+
+            for (int slot = 0; slot < team.Count; slot++)
+            {
+                TurnCharacterController character = team[slot];
+                if (character == null)
+                {
+                    continue;
+                }
+
+                Vector2 spawn;
+                bool found = slot == 0
+                    ? TryFindTeamAnchor(character, playerIndex, regionMinX, regionMaxX, out spawn)
+                    : TryFindNearTeamAnchor(character, playerIndex, regionMinX, regionMaxX, out spawn);
+
+                if (!found)
+                {
+                    found = TryFindEmergencyTeamSpawn(
+                        character,
+                        playerIndex,
+                        regionMinX,
+                        regionMaxX,
+                        out spawn);
+                }
+
+                if (!found)
+                {
+                    Debug.LogError($"No safe terrain spawn found for {character.name}.");
+                    continue;
+                }
+
+                PlaceCharacter(character, spawn);
+                placedCharacters.Add(new PlacedCharacter(playerIndex, spawn));
+                if (slot == 0)
+                {
+                    teamAnchors[playerIndex] = spawn;
+                }
+            }
+
+            playerOrder++;
+        }
+
+        spawned = true;
+    }
+
+    private bool TryFindTeamAnchor(
+        TurnCharacterController character,
+        int playerIndex,
+        float regionMinX,
+        float regionMaxX,
+        out Vector2 spawn)
+    {
+        TerrainCharacterSpawnRequest request = BuildRequest(
+            character,
+            playerIndex,
+            regionMinX,
+            regionMaxX);
+        return terrain.FindValidCharacterSpawn(request, random, out spawn);
+    }
+
+    private bool TryFindNearTeamAnchor(
+        TurnCharacterController character,
+        int playerIndex,
+        float regionMinX,
+        float regionMaxX,
+        out Vector2 spawn)
+    {
+        spawn = character.transform.position;
+        if (!teamAnchors.TryGetValue(playerIndex, out Vector2 anchor))
+        {
+            return TryFindTeamAnchor(character, playerIndex, regionMinX, regionMaxX, out spawn);
+        }
+
+        bool preferLeft = random.NextDouble() < 0.5;
+        for (int pass = 0; pass < 4; pass++)
+        {
+            bool searchLeft = pass % 2 == 0 ? preferLeft : !preferLeft;
+            float distanceMin = pass < 2 ? sameTeamAnchorSearchMinimum : sameTeamMinimumDistance;
+            float distanceMax = pass < 2 ? sameTeamAnchorSearchMaximum : sameTeamMaximumDistance;
+            float minX = searchLeft ? anchor.x - distanceMax : anchor.x + distanceMin;
+            float maxX = searchLeft ? anchor.x - distanceMin : anchor.x + distanceMax;
+            minX = Mathf.Max(regionMinX, minX);
+            maxX = Mathf.Min(regionMaxX, maxX);
+            if (maxX <= minX)
+            {
+                continue;
+            }
+
+            TerrainCharacterSpawnRequest request = BuildRequest(character, playerIndex, minX, maxX);
+            if (!terrain.FindValidCharacterSpawn(request, random, out Vector2 candidate))
+            {
+                continue;
+            }
+
+            float anchorDistance = Vector2.Distance(candidate, anchor);
+            if (anchorDistance >= sameTeamMinimumDistance &&
+                anchorDistance <= sameTeamMaximumDistance)
+            {
+                spawn = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryFindEmergencyTeamSpawn(
+        TurnCharacterController character,
+        int playerIndex,
+        float regionMinX,
+        float regionMaxX,
+        out Vector2 spawn)
+    {
+        spawn = character.transform.position;
+        if (!teamAnchors.TryGetValue(playerIndex, out Vector2 anchor))
+        {
+            TerrainCharacterSpawnRequest regionRequest = BuildRequest(
+                character,
+                playerIndex,
+                regionMinX,
+                regionMaxX);
+            regionRequest.maximumSurfaceHeightDifference =
+                Mathf.Max(maximumSurfaceHeightDifference, 0.65f);
+            regionRequest.randomAttempts = maxAttemptsPerCharacter * 2;
+            return terrain.FindValidCharacterSpawn(regionRequest, random, out spawn);
+        }
+
+        float minX = Mathf.Max(regionMinX, anchor.x - sameTeamMaximumDistance);
+        float maxX = Mathf.Min(regionMaxX, anchor.x + sameTeamMaximumDistance);
+        TerrainCharacterSpawnRequest request = BuildRequest(character, playerIndex, minX, maxX);
+        request.maximumSurfaceHeightDifference = Mathf.Max(maximumSurfaceHeightDifference, 0.65f);
+        request.randomAttempts = Mathf.Max(24, maxAttemptsPerCharacter / 4);
+        for (int pass = 0; pass < 8; pass++)
+        {
+            if (!terrain.FindValidCharacterSpawn(request, random, out Vector2 candidate))
+            {
+                continue;
+            }
+
+            float anchorDistance = Vector2.Distance(candidate, anchor);
+            if (anchorDistance >= sameTeamMinimumDistance &&
+                anchorDistance <= sameTeamMaximumDistance)
+            {
+                spawn = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private TerrainCharacterSpawnRequest BuildRequest(
+        TurnCharacterController character,
+        int playerIndex,
+        float minX,
+        float maxX)
+    {
+        Collider2D collider = character.GetComponent<Collider2D>();
+        Vector2 extents = collider != null
+            ? (Vector2)collider.bounds.extents
+            : new Vector2(0.36f, 0.58f);
+        List<TerrainSpawnExclusion> exclusions = new List<TerrainSpawnExclusion>();
+
+        for (int i = 0; i < placedCharacters.Count; i++)
+        {
+            float minimumDistance = placedCharacters[i].playerIndex == playerIndex
+                ? sameTeamMinimumDistance
+                : enemyMinimumDistance;
+            exclusions.Add(new TerrainSpawnExclusion(placedCharacters[i].position, minimumDistance));
+        }
+
+        return new TerrainCharacterSpawnRequest
+        {
+            minWorldX = minX,
+            maxWorldX = maxX,
+            colliderExtents = extents,
+            spawnLiftWorld = spawnLiftWorld,
+            waterPaddingWorld = waterPaddingWorld,
+            maximumSurfaceHeightDifference = maximumSurfaceHeightDifference,
+            clearanceSampleStepWorld = clearanceSampleStepWorld,
+            randomAttempts = maxAttemptsPerCharacter,
+            exclusions = exclusions
+        };
+    }
+
+    private void GetPlayerRegion(int zeroBasedPlayerOrder, int playerCount, out float minX, out float maxX)
+    {
+        Bounds bounds = terrain.GetTerrainBounds();
+        float left = bounds.min.x + mapEdgePaddingWorld;
+        float right = bounds.max.x - mapEdgePaddingWorld;
+        float usableWidth = Mathf.Max(1f, right - left);
+
+        if (playerCount == 2)
+        {
+            float contestWidth = usableWidth * 0.2f;
+            float sideWidth = (usableWidth - contestWidth) * 0.5f;
+            if (zeroBasedPlayerOrder == 0)
+            {
+                minX = left;
+                maxX = left + sideWidth;
+            }
+            else
+            {
+                minX = right - sideWidth;
+                maxX = right;
+            }
+            return;
+        }
+
+        float gap = Mathf.Min(0.75f, usableWidth * 0.025f);
+        float regionWidth = (usableWidth - gap * (playerCount - 1)) / playerCount;
+        minX = left + zeroBasedPlayerOrder * (regionWidth + gap);
+        maxX = minX + regionWidth;
+    }
+
+    private SortedDictionary<int, List<TurnCharacterController>> BuildTeams()
+    {
+        SortedDictionary<int, List<TurnCharacterController>> teams =
+            new SortedDictionary<int, List<TurnCharacterController>>();
         for (int i = 0; i < characters.Length; i++)
         {
             TurnCharacterController character = characters[i];
@@ -57,169 +302,29 @@ public class TerrainRandomSpawner : MonoBehaviour
 
             ObjectHeadTeamMember member = character.GetComponent<ObjectHeadTeamMember>();
             int playerIndex = member != null ? member.PlayerIndex : i + 1;
-            int slotIndex = member != null ? member.TeamSlotIndex : 1;
-            int zoneIndex = Mathf.Clamp((slotIndex - 1) * playerCount + (playerIndex - 1), 0, characters.Length - 1);
-            if (TryFindSpawnPosition(character, zoneIndex, characters.Length, out Vector2 spawnPosition))
+            if (!teams.TryGetValue(playerIndex, out List<TurnCharacterController> team))
             {
-                PlaceCharacter(character, spawnPosition);
-                usedSpawnPositions.Add(spawnPosition);
+                team = new List<TurnCharacterController>();
+                teams[playerIndex] = team;
             }
-            else
-            {
-                Debug.LogWarning($"No fully safe deterministic spawn found for {character.name}; keeping its fallback position.");
-            }
+            team.Add(character);
         }
-
-        spawned = true;
+        return teams;
     }
 
-    private bool TryFindSpawnPosition(
-        TurnCharacterController character,
-        int zoneIndex,
-        int zoneCount,
-        out Vector2 spawnPosition)
+    private static int CompareTeamSlot(TurnCharacterController left, TurnCharacterController right)
     {
-        float terrainWidth = terrain.WidthPx / (float)terrain.PixelsPerUnit;
-        float normalizedPadding = terrainWidth > 0f ? mapEdgePaddingWorld / terrainWidth : 0f;
-        float zoneMin = Mathf.Lerp(normalizedPadding, 1f - normalizedPadding, zoneIndex / (float)Mathf.Max(1, zoneCount));
-        float zoneMax = Mathf.Lerp(normalizedPadding, 1f - normalizedPadding, (zoneIndex + 1f) / Mathf.Max(1, zoneCount));
-        zoneMin = Mathf.Clamp01(zoneMin);
-        zoneMax = Mathf.Clamp01(zoneMax);
-
-        for (int attempt = 0; attempt < maxAttemptsPerCharacter; attempt++)
-        {
-            float normalizedX = Mathf.Lerp(zoneMin, zoneMax, (float)random.NextDouble());
-            if (TryBuildSafeCandidate(character, normalizedX, out Vector2 candidate))
-            {
-                spawnPosition = candidate;
-                return true;
-            }
-        }
-
-        int scanSteps = 40;
-        for (int step = 0; step <= scanSteps; step++)
-        {
-            float normalizedX = Mathf.Lerp(zoneMin, zoneMax, step / (float)scanSteps);
-            if (TryBuildSafeCandidate(character, normalizedX, out Vector2 candidate))
-            {
-                spawnPosition = candidate;
-                return true;
-            }
-        }
-
-        spawnPosition = character.transform.position;
-        return false;
+        if (left == right) return 0;
+        if (left == null) return 1;
+        if (right == null) return -1;
+        ObjectHeadTeamMember leftMember = left.GetComponent<ObjectHeadTeamMember>();
+        ObjectHeadTeamMember rightMember = right.GetComponent<ObjectHeadTeamMember>();
+        int leftSlot = leftMember != null ? leftMember.TeamSlotIndex : 999;
+        int rightSlot = rightMember != null ? rightMember.TeamSlotIndex : 999;
+        return leftSlot.CompareTo(rightSlot);
     }
 
-    private bool TryBuildSafeCandidate(
-        TurnCharacterController character,
-        float normalizedX,
-        out Vector2 candidate)
-    {
-        float worldX = terrain.TerrainOriginWorld.x +
-                       terrain.WidthPx / (float)terrain.PixelsPerUnit * Mathf.Clamp01(normalizedX);
-        if (!TryFindSurfaceAtWorldX(worldX, out float surfaceY))
-        {
-            candidate = Vector2.zero;
-            return false;
-        }
-
-        Collider2D collider = character.GetComponent<Collider2D>();
-        Vector2 extents = collider != null ? collider.bounds.extents : new Vector2(0.36f, 0.58f);
-        candidate = new Vector2(worldX, surfaceY + extents.y + spawnLiftWorld);
-        if (candidate.y < terrain.TerrainOriginWorld.y + waterPaddingWorld ||
-            !HasStableSupport(candidate, extents) ||
-            !HasClearance(candidate, extents) ||
-            !IsFarEnoughFromOtherSpawns(candidate))
-        {
-            return false;
-        }
-
-        return true;
-    }
-
-    private bool HasStableSupport(Vector2 candidate, Vector2 extents)
-    {
-        float supportHalfWidth = extents.x + 0.12f;
-        float minY = float.PositiveInfinity;
-        float maxY = float.NegativeInfinity;
-        const int samples = 5;
-
-        for (int i = 0; i < samples; i++)
-        {
-            float x = candidate.x + Mathf.Lerp(-supportHalfWidth, supportHalfWidth, i / (float)(samples - 1));
-            if (!TryFindSurfaceAtWorldX(x, out float surfaceY))
-            {
-                return false;
-            }
-
-            minY = Mathf.Min(minY, surfaceY);
-            maxY = Mathf.Max(maxY, surfaceY);
-        }
-
-        return maxY - minY <= maximumSurfaceHeightDifference;
-    }
-
-    private bool HasClearance(Vector2 candidate, Vector2 extents)
-    {
-        float left = candidate.x - extents.x * 0.9f;
-        float right = candidate.x + extents.x * 0.9f;
-        float bottom = candidate.y - extents.y + 0.08f;
-        float top = candidate.y + extents.y + 0.15f;
-
-        for (float y = bottom; y <= top; y += clearanceSampleStepWorld)
-        {
-            for (float x = left; x <= right; x += clearanceSampleStepWorld)
-            {
-                if (terrain.IsSolidWorld(new Vector2(x, y)))
-                {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    private bool TryFindSurfaceAtWorldX(float worldX, out float surfaceY)
-    {
-        Vector2Int pixel = terrain.WorldToPixel(new Vector2(worldX, terrain.TerrainOriginWorld.y));
-        if (pixel.x < 0 || pixel.x >= terrain.WidthPx)
-        {
-            surfaceY = 0f;
-            return false;
-        }
-
-        for (int y = terrain.HeightPx - 2; y >= 0; y--)
-        {
-            Vector2 solid = terrain.PixelToWorld(new Vector2Int(pixel.x, y));
-            Vector2 above = terrain.PixelToWorld(new Vector2Int(pixel.x, y + 1));
-            if (terrain.IsSolidWorld(solid) && !terrain.IsSolidWorld(above))
-            {
-                surfaceY = above.y;
-                return true;
-            }
-        }
-
-        surfaceY = 0f;
-        return false;
-    }
-
-    private bool IsFarEnoughFromOtherSpawns(Vector2 candidate)
-    {
-        float minimumSquared = minCharacterSpacingWorld * minCharacterSpacingWorld;
-        for (int i = 0; i < usedSpawnPositions.Count; i++)
-        {
-            if ((candidate - usedSpawnPositions[i]).sqrMagnitude < minimumSquared)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private void PlaceCharacter(TurnCharacterController character, Vector2 spawnPosition)
+    private static void PlaceCharacter(TurnCharacterController character, Vector2 spawnPosition)
     {
         character.transform.position = new Vector3(spawnPosition.x, spawnPosition.y, character.transform.position.z);
         Rigidbody2D body = character.GetComponent<Rigidbody2D>();
@@ -228,23 +333,6 @@ public class TerrainRandomSpawner : MonoBehaviour
             body.linearVelocity = Vector2.zero;
             body.angularVelocity = 0f;
         }
-    }
-
-    private int GetPlayerCount()
-    {
-        HashSet<int> players = new HashSet<int>();
-        for (int i = 0; i < characters.Length; i++)
-        {
-            ObjectHeadTeamMember member = characters[i] != null
-                ? characters[i].GetComponent<ObjectHeadTeamMember>()
-                : null;
-            if (member != null)
-            {
-                players.Add(member.PlayerIndex);
-            }
-        }
-
-        return Mathf.Max(1, players.Count);
     }
 
     private void RefreshCharactersFromScene()

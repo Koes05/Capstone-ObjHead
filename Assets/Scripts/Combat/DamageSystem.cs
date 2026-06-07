@@ -3,6 +3,7 @@ using UnityEngine;
 
 public static class DamageSystem
 {
+    public const bool FriendlyFireEnabled = true;
     private const float MinimumKnockbackFalloff = 0.45f;
     private const float MinimumHorizontalComponent = 0.35f;
     private const float MinimumVerticalComponent = 0.2f;
@@ -26,7 +27,7 @@ public static class DamageSystem
             }
 
             CharacterCombat combat = hit.GetComponentInParent<CharacterCombat>();
-            if (combat == null || combat.IsDead || !damagedCharacters.Add(combat))
+            if (!CanDamage(owner, combat) || !damagedCharacters.Add(combat))
             {
                 continue;
             }
@@ -73,5 +74,11 @@ public static class DamageSystem
             combat.ApplyKnockback(knockbackDirection * knockbackForce * knockbackFalloff);
             combat.TakeDamage(damage);
         }
+    }
+
+    public static bool CanDamage(CharacterCombat owner, CharacterCombat target)
+    {
+        // Owner, allies, and enemies are all valid targets in Object Head Battle.
+        return target != null && !target.IsDead;
     }
 }

@@ -94,7 +94,7 @@ public class GroundHazardZone : MonoBehaviour
     public void NotifySegmentEnter(Collider2D other)
     {
         CharacterCombat combat = other != null ? other.GetComponentInParent<CharacterCombat>() : null;
-        if (combat == null || combat.IsDead)
+        if (!DamageSystem.CanDamage(owner, combat))
         {
             return;
         }
@@ -166,7 +166,8 @@ public class GroundHazardZone : MonoBehaviour
 
     private void ApplyToCurrentCharacter(CharacterCombat combat)
     {
-        if (turnManager == null ||
+        if (!DamageSystem.CanDamage(owner, combat) ||
+            turnManager == null ||
             turnManager.CurrentCharacter == null ||
             turnManager.CurrentCharacter.gameObject != combat.gameObject)
         {

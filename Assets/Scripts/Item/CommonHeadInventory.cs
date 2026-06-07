@@ -7,6 +7,7 @@ public class CommonHeadInventory : MonoBehaviour
     private const int SlotCount = 3;
     [SerializeField, Min(1)] private int playerIndex = 1;
     [SerializeField] private CommonHeadType[] slots = new CommonHeadType[SlotCount];
+    [SerializeField] private Sprite[] slotSprites = new Sprite[SlotCount];
 
     public event Action InventoryChanged;
     public int PlayerIndex => playerIndex;
@@ -34,6 +35,12 @@ public class CommonHeadInventory : MonoBehaviour
         return slotIndex >= 0 && slotIndex < SlotCount ? slots[slotIndex] : CommonHeadType.None;
     }
 
+    public Sprite GetSlotSprite(int slotIndex)
+    {
+        EnsureSlots();
+        return slotIndex >= 0 && slotIndex < SlotCount ? slotSprites[slotIndex] : null;
+    }
+
     public void ConfigurePlayer(int ownerPlayerIndex)
     {
         playerIndex = Mathf.Max(1, ownerPlayerIndex);
@@ -42,6 +49,11 @@ public class CommonHeadInventory : MonoBehaviour
     }
 
     public bool TryAdd(CommonHeadType type, out int slotIndex)
+    {
+        return TryAdd(type, CommonHeadItem.GetDefaultSprite(type), out slotIndex);
+    }
+
+    public bool TryAdd(CommonHeadType type, Sprite sprite, out int slotIndex)
     {
         EnsureSlots();
         slotIndex = -1;
@@ -58,6 +70,7 @@ public class CommonHeadInventory : MonoBehaviour
             }
 
             slots[i] = type;
+            slotSprites[i] = sprite != null ? sprite : CommonHeadItem.GetDefaultSprite(type);
             slotIndex = i;
             InventoryChanged?.Invoke();
             return true;
@@ -75,6 +88,7 @@ public class CommonHeadInventory : MonoBehaviour
         }
 
         slots[slotIndex] = CommonHeadType.None;
+        slotSprites[slotIndex] = null;
         InventoryChanged?.Invoke();
         return true;
     }
@@ -90,6 +104,17 @@ public class CommonHeadInventory : MonoBehaviour
             }
 
             slots = resized;
+        }
+
+        if (slotSprites == null || slotSprites.Length != SlotCount)
+        {
+            Sprite[] resizedSprites = new Sprite[SlotCount];
+            if (slotSprites != null)
+            {
+                Array.Copy(slotSprites, resizedSprites, Mathf.Min(slotSprites.Length, resizedSprites.Length));
+            }
+
+            slotSprites = resizedSprites;
         }
     }
 }

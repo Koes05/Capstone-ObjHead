@@ -31,6 +31,8 @@ public class CharacterCombat : MonoBehaviour
     public float ThrowPower => throwPower;
     public float KnockbackResistance => knockbackResistance;
     public bool IsDead => isDead;
+    public bool ShouldIgnoreFallDamage =>
+        turnController != null && turnController.IgnoreFallDamageUntilGrounded;
     public Vector2 KnockbackCenter => bodyCollider != null ? (Vector2)bodyCollider.bounds.center : (Vector2)transform.position;
 
     private void Awake()
@@ -111,6 +113,7 @@ public class CharacterCombat : MonoBehaviour
 
         isDead = true;
         currentHp = 0;
+        turnController?.ClearFallDamageImmunity();
         turnController?.SetControlEnabled(false);
         turnController?.StopHorizontalMovement();
 

@@ -11,6 +11,7 @@ public class ObjectHeadHUD : MonoBehaviour
     private GUIStyle labelStyle;
     private GUIStyle titleStyle;
     private GUIStyle warningStyle;
+    private GUIStyle selectedStyle;
     private Texture2D whiteTexture;
 
     private void Start()
@@ -97,6 +98,8 @@ public class ObjectHeadHUD : MonoBehaviour
         CommonHeadInventory inventory = member != null && manager != null
             ? manager.GetInventory(member.PlayerIndex)
             : null;
+        CommonHeadUseController commonHeadUse =
+            turnManager.CurrentCharacter.GetComponent<CommonHeadUseController>();
         if (inventory == null)
         {
             return;
@@ -107,7 +110,18 @@ public class ObjectHeadHUD : MonoBehaviour
         {
             CommonHeadType type = inventory.GetSlot(i);
             string state = type == CommonHeadType.None ? "Empty" : type.ToString();
-            GUILayout.Label($"{i + 6}: {state}", type == CommonHeadType.None ? warningStyle : labelStyle);
+            bool selected = commonHeadUse != null && commonHeadUse.SelectedSlotIndex == i;
+            string prefix = selected ? "> " : "  ";
+            GUIStyle style = selected ? selectedStyle : type == CommonHeadType.None ? warningStyle : labelStyle;
+            DrawCommonHeadSlot($"{prefix}{i + 6}: {state}", style, selected);
+        }
+
+        if (commonHeadUse != null && commonHeadUse.HasSelectedCommonHead)
+        {
+            string action = commonHeadUse.SelectedType == CommonHeadType.Mobility
+                ? "Charged jet jump"
+                : "Charged throw";
+            GUILayout.Label($"Selected: {commonHeadUse.SelectedType} / {action}", selectedStyle);
         }
     }
 
@@ -163,7 +177,8 @@ public class ObjectHeadHUD : MonoBehaviour
         GUILayout.Label("Controls", titleStyle);
         GUILayout.Label("A/D move, W jump, mouse aim", labelStyle);
         GUILayout.Label("Space charge/fire, 1/2/3 skill", labelStyle);
-        GUILayout.Label("6/7/8 use common head, Tab end turn", labelStyle);
+        GUILayout.Label("6/7/8 select common head, Space use, Esc cancel", labelStyle);
+        GUILayout.Label("Tab end turn", labelStyle);
         GUILayout.Label("O/K/L/; camera, I focus character, P overview", labelStyle);
         GUILayout.Label("Mouse wheel or +/- zoom, mouse drag camera", labelStyle);
     }
@@ -177,6 +192,26 @@ public class ObjectHeadHUD : MonoBehaviour
         GUI.color = fillColor;
         GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width * Mathf.Clamp01(value01), rect.height), whiteTexture);
         GUI.color = previous;
+    }
+
+    private void DrawCommonHeadSlot(string text, GUIStyle textStyle, bool selected)
+    {
+        Rect rect = GUILayoutUtility.GetRect(348f, 26f, GUILayout.Width(348f), GUILayout.Height(26f));
+        GUI.Box(rect, GUIContent.none);
+
+        if (selected)
+        {
+            Color previous = GUI.color;
+            GUI.color = new Color(0.3f, 1f, 0.65f, 1f);
+            const float border = 2f;
+            GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, border), whiteTexture);
+            GUI.DrawTexture(new Rect(rect.x, rect.yMax - border, rect.width, border), whiteTexture);
+            GUI.DrawTexture(new Rect(rect.x, rect.y, border, rect.height), whiteTexture);
+            GUI.DrawTexture(new Rect(rect.xMax - border, rect.y, border, rect.height), whiteTexture);
+            GUI.color = previous;
+        }
+
+        GUI.Label(new Rect(rect.x + 8f, rect.y + 2f, rect.width - 16f, rect.height - 4f), text, textStyle);
     }
 
     private void DrawMatchResult()
@@ -222,6 +257,13 @@ public class ObjectHeadHUD : MonoBehaviour
         {
             fontSize = 14,
             normal = { textColor = new Color(1f, 0.75f, 0.25f, 1f) }
+        };
+
+        selectedStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 14,
+            fontStyle = FontStyle.Bold,
+            normal = { textColor = new Color(0.3f, 1f, 0.65f, 1f) }
         };
     }
 

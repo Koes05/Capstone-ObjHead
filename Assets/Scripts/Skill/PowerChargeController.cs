@@ -98,6 +98,13 @@ public class PowerChargeController : MonoBehaviour
         return true;
     }
 
+    public void CancelCharge()
+    {
+        hasReleasedPower = false;
+        releasedPower = 0f;
+        ResetCharge();
+    }
+
     private void ReleasePower(float power)
     {
         releasedPower = Mathf.Clamp01(power);

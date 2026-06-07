@@ -6,35 +6,50 @@ public class CommonHeadItemSpawner : MonoBehaviour
 {
     [SerializeField] private TurnManager turnManager;
     [SerializeField] private TerrainManager terrain;
-    [SerializeField] private Transform spawnRoot;
+    [SerializeField] private int deterministicSeed = 6975;
     [SerializeField, Min(1)] private int spawnEveryTurns = 3;
-    [SerializeField, Min(1)] private int maxActiveItems = 3;
+    [SerializeField, Min(1)] private int targetCountPerType = 2;
+    [SerializeField, Min(0f)] private float mapEdgePaddingWorld = 2f;
+    [SerializeField, Min(0f)] private float waterPaddingWorld = 1.5f;
     [SerializeField, Min(0f)] private float minCharacterDistance = 2f;
     [SerializeField, Min(0f)] private float minItemDistance = 1.5f;
     [SerializeField, Min(0f)] private float minHazardDistance = 1.5f;
+    [SerializeField, Min(0.05f)] private float minimumSpawnHeight = 0.3f;
+    [SerializeField, Min(0.05f)] private float maximumSpawnHeight = 0.6f;
+    [SerializeField, Min(0.05f)] private float maximumSurfaceHeightDifference = 0.35f;
+    [SerializeField, Min(1)] private int maxSpawnAttempts = 30;
     [SerializeField] private Sprite attackSprite;
     [SerializeField] private Sprite mobilitySprite;
     [SerializeField] private Sprite terrainCreationSprite;
 
     private int turnsObserved;
+    private System.Random random;
 
-    public void Configure(TurnManager manager, TerrainManager terrainManager, Transform itemSpawnRoot)
+    public int TargetTotalItems => targetCountPerType * 3;
+
+    public void Configure(TurnManager manager, TerrainManager terrainManager, int seed)
     {
         Unsubscribe();
         turnManager = manager;
         terrain = terrainManager;
-        spawnRoot = itemSpawnRoot;
+        deterministicSeed = seed;
+        random = new System.Random(deterministicSeed);
         LoadFallbackSprites();
         Subscribe();
+        RefillMissingItems();
     }
 
-    public void Configure(TurnManager manager, Transform itemSpawnRoot)
+    public void Configure(TurnManager manager, TerrainManager terrainManager)
     {
-        Configure(manager, FindAny<TerrainManager>(), itemSpawnRoot);
+        Configure(manager, terrainManager, deterministicSeed);
     }
 
     private void OnEnable()
     {
+        if (random == null)
+        {
+            random = new System.Random(deterministicSeed);
+        }
         LoadFallbackSprites();
         Subscribe();
     }
@@ -68,82 +83,117 @@ public class CommonHeadItemSpawner : MonoBehaviour
         turnsObserved++;
         if (turnsObserved % Mathf.Max(1, spawnEveryTurns) == 0)
         {
-            TrySpawn();
+            RefillMissingItems();
         }
     }
 
-    public bool TrySpawn()
+    public void RefillMissingItems()
     {
-        if (CommonHeadItem.ActiveCount >= maxActiveItems || spawnRoot == null || spawnRoot.childCount == 0)
-        {
-            return false;
-        }
+        SpawnMissingType(CommonHeadType.Attack);
+        SpawnMissingType(CommonHeadType.Mobility);
+        SpawnMissingType(CommonHeadType.TerrainCreation);
+    }
 
-        List<Transform> candidates = new List<Transform>();
-        for (int i = 0; i < spawnRoot.childCount; i++)
+    private void SpawnMissingType(CommonHeadType type)
+    {
+        int missing = Mathf.Max(0, targetCountPerType - CommonHeadItem.GetActiveCount(type));
+        for (int i = 0; i < missing; i++)
         {
-            Transform point = spawnRoot.GetChild(i);
-            if (point != null && IsValidSpawnPoint(point.position))
+            if (!TrySpawn(type))
             {
-                candidates.Add(point);
+                Debug.Log($"Common head spawn skipped for {type}: no valid terrain position.");
+                break;
             }
         }
-
-        if (candidates.Count == 0)
-        {
-            Debug.Log("Common head spawn skipped: no valid ItemSpawnPoint.");
-            return false;
-        }
-
-        Transform selected = candidates[Random.Range(0, candidates.Count)];
-        CommonHeadType type = (CommonHeadType)Random.Range(
-            (int)CommonHeadType.Attack,
-            (int)CommonHeadType.TerrainCreation + 1);
-        CommonHeadItem.Create(type, selected.position, GetSprite(type));
-        Debug.Log($"Spawned {type} common head at {selected.name}. Active: {CommonHeadItem.ActiveCount}/{maxActiveItems}");
-        return true;
     }
 
-    private bool IsValidSpawnPoint(Vector2 position)
+    private bool TrySpawn(CommonHeadType type)
     {
         if (terrain == null)
         {
             terrain = FindAny<TerrainManager>();
         }
-
-        bool hasGround = false;
-        if (terrain != null)
+        if (terrain == null || random == null)
         {
-            for (float distance = 0.1f; distance <= 2f; distance += 0.1f)
+            return false;
+        }
+
+        for (int attempt = 0; attempt < maxSpawnAttempts; attempt++)
+        {
+            GetWeightedHorizontalBand(out float minX, out float maxX);
+            TerrainItemSpawnRequest request = new TerrainItemSpawnRequest
             {
-                if (terrain.IsSolidWorld(position + Vector2.down * distance))
-                {
-                    hasGround = true;
-                    break;
-                }
+                minWorldX = minX,
+                maxWorldX = maxX,
+                halfExtents = new Vector2(0.38f, 0.45f),
+                minimumHeightAboveSurface = minimumSpawnHeight,
+                maximumHeightAboveSurface = maximumSpawnHeight,
+                waterPaddingWorld = waterPaddingWorld,
+                maximumSurfaceHeightDifference = maximumSurfaceHeightDifference,
+                clearanceSampleStepWorld = 0.16f,
+                randomAttempts = 8,
+                exclusions = BuildExclusions()
+            };
+
+            if (!terrain.FindValidItemSpawn(request, random, out Vector2 spawnPosition))
+            {
+                continue;
             }
+
+            CommonHeadItem.Create(type, spawnPosition, GetSprite(type));
+            Debug.Log(
+                $"Spawned {type} common head at {spawnPosition}. " +
+                $"{CommonHeadItem.GetActiveCount(type)}/{targetCountPerType} for this type, " +
+                $"{CommonHeadItem.ActiveCount}/{TargetTotalItems} total.");
+            return true;
         }
 
-        if (!hasGround)
-        {
-            return false;
-        }
-
-        if (IsNearAny<TurnCharacterController>(position, minCharacterDistance) ||
-            IsNearAny<CommonHeadItem>(position, minItemDistance) ||
-            IsNearAny<GroundHazardZone>(position, minHazardDistance))
-        {
-            return false;
-        }
-
-        return true;
+        return false;
     }
 
-    private static bool IsNearAny<T>(Vector2 position, float distance) where T : Component
+    private List<TerrainSpawnExclusion> BuildExclusions()
     {
-        if (distance <= 0f)
+        List<TerrainSpawnExclusion> exclusions = new List<TerrainSpawnExclusion>();
+        AddExclusions<TurnCharacterController>(exclusions, minCharacterDistance);
+        AddExclusions<CommonHeadItem>(exclusions, minItemDistance);
+        AddExclusions<GroundHazardZone>(exclusions, minHazardDistance);
+        return exclusions;
+    }
+
+    private void GetWeightedHorizontalBand(out float minX, out float maxX)
+    {
+        Bounds bounds = terrain.GetTerrainBounds();
+        float left = bounds.min.x + mapEdgePaddingWorld;
+        float right = bounds.max.x - mapEdgePaddingWorld;
+        float width = Mathf.Max(1f, right - left);
+        float roll = (float)random.NextDouble();
+
+        if (roll < 0.5f)
         {
-            return false;
+            minX = left + width * 0.35f;
+            maxX = left + width * 0.65f;
+            return;
+        }
+
+        bool useLeft = random.NextDouble() < 0.5;
+        if (roll < 0.8f)
+        {
+            minX = left + width * (useLeft ? 0.15f : 0.65f);
+            maxX = left + width * (useLeft ? 0.35f : 0.85f);
+            return;
+        }
+
+        minX = left + width * (useLeft ? 0f : 0.85f);
+        maxX = left + width * (useLeft ? 0.15f : 1f);
+    }
+
+    private static void AddExclusions<T>(
+        List<TerrainSpawnExclusion> exclusions,
+        float minimumDistance) where T : Component
+    {
+        if (minimumDistance <= 0f)
+        {
+            return;
         }
 
 #if UNITY_6000_0_OR_NEWER || UNITY_2023_1_OR_NEWER
@@ -151,16 +201,13 @@ public class CommonHeadItemSpawner : MonoBehaviour
 #else
         T[] objects = Object.FindObjectsOfType<T>();
 #endif
-        float distanceSquared = distance * distance;
         for (int i = 0; i < objects.Length; i++)
         {
-            if (objects[i] != null && ((Vector2)objects[i].transform.position - position).sqrMagnitude < distanceSquared)
+            if (objects[i] != null)
             {
-                return true;
+                exclusions.Add(new TerrainSpawnExclusion(objects[i].transform.position, minimumDistance));
             }
         }
-
-        return false;
     }
 
     private Sprite GetSprite(CommonHeadType type)
