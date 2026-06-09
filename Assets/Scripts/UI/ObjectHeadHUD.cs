@@ -68,11 +68,25 @@ public class ObjectHeadHUD : MonoBehaviour
 
         string playerText = member != null ? $"P{member.PlayerIndex} / Slot {member.TeamSlotIndex}" : current.name;
         string kindText = selector != null ? selector.CharacterKind.ToString() : "Unknown";
+        bool settlementTimer = turnManager.IsSettlementTimeActive;
+        bool residualTimer = turnManager.IsResidualTimeActive;
+        float timerSeconds = settlementTimer
+            ? turnManager.RemainingSettlementSeconds
+            : residualTimer ? turnManager.RemainingResidualSeconds : turnManager.RemainingTurnSeconds;
+        float timer01 = settlementTimer
+            ? turnManager.SettlementTime01
+            : residualTimer ? turnManager.ResidualTime01 : turnManager.TurnTime01;
+        string timerLabel = settlementTimer ? "정산시간" : residualTimer ? "잔존시간" : "TURN TIMER";
+        Color timerColor = settlementTimer
+            ? new Color(1f, 0.2f, 0.2f, 0.95f)
+            : residualTimer
+            ? new Color(0.3f, 1f, 0.65f, 0.95f)
+            : new Color(0.25f, 0.85f, 1f, 0.95f);
         GUILayout.Label($"Turn: {playerText}  {kindText}", labelStyle);
         GUILayout.Label($"Round: {turnManager.RoundSerial}", labelStyle);
         GUILayout.Label($"Phase: {turnManager.CurrentPhase}", labelStyle);
-        GUILayout.Label($"Time: {Mathf.CeilToInt(turnManager.RemainingTurnSeconds)}s", turnManager.RemainingTurnSeconds <= 5f ? warningStyle : labelStyle);
-        DrawHorizontalMeter(turnManager.TurnTime01, new Color(0.25f, 0.85f, 1f, 0.95f), 348f, 8f);
+        GUILayout.Label($"{timerLabel}: {Mathf.CeilToInt(timerSeconds)}s", timerSeconds <= 5f ? warningStyle : labelStyle);
+        DrawHorizontalMeter(timer01, timerColor, 348f, 8f);
 
         if (combat != null)
         {

@@ -12,6 +12,8 @@ public enum ObjectHeadCharacterKind
 [DisallowMultipleComponent]
 public class CharacterVisual : MonoBehaviour
 {
+    private const float TemporaryCommonHeadScaleMultiplier = 0.66f;
+
     [SerializeField] private ObjectHeadCharacterKind characterKind = ObjectHeadCharacterKind.Bulb;
     [SerializeField, Range(0, 2)] private int selectedSkillIndex;
     [SerializeField] private bool spriteFacesRightByDefault;
@@ -268,7 +270,7 @@ public class CharacterVisual : MonoBehaviour
         bodyRenderer.transform.localPosition = bodyLocalOffset;
         headRenderer.transform.localPosition = headLocalOffset;
         bodyRenderer.transform.localScale = Vector3.one * bodyScale;
-        headRenderer.transform.localScale = Vector3.one * headScale;
+        ApplyHeadScale();
         bodyRenderer.sortingOrder = bodySortingOrder;
         headRenderer.sortingOrder = headSortingOrder;
         ApplyFacing();
@@ -308,8 +310,22 @@ public class CharacterVisual : MonoBehaviour
             : uniqueHeadSprite != null
                 ? uniqueHeadSprite
                 : GetSelectedHeadSprite();
+        ApplyHeadScale();
         headRenderer.enabled = !isHeadHidden && headRenderer.sprite != null;
         ApplyFacing();
+    }
+
+    private void ApplyHeadScale()
+    {
+        if (headRenderer == null)
+        {
+            return;
+        }
+
+        float scaleMultiplier = temporaryCommonHeadSprite != null
+            ? TemporaryCommonHeadScaleMultiplier
+            : 1f;
+        headRenderer.transform.localScale = Vector3.one * headScale * scaleMultiplier;
     }
 
     private void SetBodySprite(Sprite sprite)

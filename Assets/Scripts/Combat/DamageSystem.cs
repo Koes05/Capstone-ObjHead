@@ -34,9 +34,7 @@ public static class DamageSystem
 
             Vector2 characterCenter = combat.KnockbackCenter;
             Vector2 impactToCharacter = characterCenter - center;
-            float distance = impactToCharacter.magnitude;
-            float distanceRatio = Mathf.Clamp01(distance / radius);
-            float falloff = 1f - distanceRatio;
+            float falloff = CalculateExplosionFalloff(hit, center, characterCenter, radius);
             int damage = Mathf.CeilToInt(maxDamage * falloff);
 
             if (impactToCharacter.sqrMagnitude < 0.001f)
@@ -74,6 +72,23 @@ public static class DamageSystem
             combat.ApplyKnockback(knockbackDirection * knockbackForce * knockbackFalloff);
             combat.TakeDamage(damage);
         }
+    }
+
+    public static float CalculateExplosionFalloff(Collider2D hit, Vector2 center, Vector2 fallbackPoint, float radius)
+    {
+        if (radius <= 0f)
+        {
+            return 0f;
+        }
+
+        Vector2 damagePoint = fallbackPoint;
+        if (hit != null && hit.enabled)
+        {
+            damagePoint = hit.ClosestPoint(center);
+        }
+
+        float distanceRatio = Mathf.Clamp01(Vector2.Distance(center, damagePoint) / radius);
+        return 1f - distanceRatio;
     }
 
     public static bool CanDamage(CharacterCombat owner, CharacterCombat target)

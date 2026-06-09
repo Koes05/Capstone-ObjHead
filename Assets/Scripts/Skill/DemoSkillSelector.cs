@@ -30,6 +30,11 @@ public struct ObjectHeadSkillSettings
     public float chainSpacingWorld;
     public float chainDelaySeconds;
     public int chainMaxTotalDamage;
+    public float chainSpreadRadiusWorld;
+    public bool useWideClusterPattern;
+    public bool useRollingChainPath;
+    public float rollingChainMinSpeed;
+    public float rollingChainAngularSpeed;
     public float delaySeconds;
     public int zoneDurationTurns;
     public int zoneDamagePerTick;
@@ -49,6 +54,7 @@ public struct ObjectHeadSkillSettings
     public int commonHeadTypeId;
     public int terrainBurstCount;
     public int terrainBurstStampRadiusPx;
+    public int terrainBurstMaxPlacementAttemptsPerStamp;
     public float terrainBurstIntervalSeconds;
     public float terrainBurstSpreadWorld;
     public float terrainBurstVerticalBiasWorld;
@@ -80,6 +86,11 @@ public struct ObjectHeadSkillSettings
             chainSpacingWorld = 0.25f,
             chainDelaySeconds = 0.1f,
             chainMaxTotalDamage = maxDamage,
+            chainSpreadRadiusWorld = 0f,
+            useWideClusterPattern = false,
+            useRollingChainPath = false,
+            rollingChainMinSpeed = 0f,
+            rollingChainAngularSpeed = 0f,
             delaySeconds = 0f,
             zoneDurationTurns = 0,
             zoneDamagePerTick = 0,
@@ -99,9 +110,10 @@ public struct ObjectHeadSkillSettings
             commonHeadTypeId = 0,
             terrainBurstCount = 0,
             terrainBurstStampRadiusPx = 0,
+            terrainBurstMaxPlacementAttemptsPerStamp = 4,
             terrainBurstIntervalSeconds = 0.06f,
             terrainBurstSpreadWorld = 1f,
-            terrainBurstVerticalBiasWorld = 0.25f,
+            terrainBurstVerticalBiasWorld = 0f,
             finalTerrainRadiusXWorld = 1f,
             finalTerrainRadiusYWorld = 0.8f,
             maxBuildHeightAboveSurfaceWorld = 5f
@@ -121,6 +133,7 @@ public class DemoSkillSelector : MonoBehaviour
     [SerializeField, Min(1)] private int seedTerrainBurstCount = 12;
     [SerializeField, Min(1)] private int seedTerrainBurstStampRadiusPx = 9;
     [SerializeField, Min(0.01f)] private float seedTerrainBurstIntervalSeconds = 0.055f;
+    [SerializeField, Min(1)] private int terrainBurstMaxPlacementAttemptsPerStamp = 4;
     [SerializeField, Min(0.1f)] private float seedTerrainRadiusXWorld = 1.2f;
     [SerializeField, Min(0.5f)] private float seedTerrainRadiusYWorld = 0.95f;
     [SerializeField, Min(0.5f)] private float minimumCreatedTerrainRadiusYWorld = 0.5f;
@@ -304,9 +317,10 @@ public class DemoSkillSelector : MonoBehaviour
             settings.terrainRadiusPx = 18;
             settings.terrainBurstCount = seedTerrainBurstCount;
             settings.terrainBurstStampRadiusPx = seedTerrainBurstStampRadiusPx;
+            settings.terrainBurstMaxPlacementAttemptsPerStamp = terrainBurstMaxPlacementAttemptsPerStamp;
             settings.terrainBurstIntervalSeconds = seedTerrainBurstIntervalSeconds;
             settings.terrainBurstSpreadWorld = seedTerrainRadiusXWorld;
-            settings.terrainBurstVerticalBiasWorld = 0.3f;
+            settings.terrainBurstVerticalBiasWorld = 0f;
             settings.finalTerrainRadiusXWorld = seedTerrainRadiusXWorld;
             settings.finalTerrainRadiusYWorld = Mathf.Max(
                 minimumCreatedTerrainRadiusYWorld,
@@ -372,7 +386,10 @@ public class DemoSkillSelector : MonoBehaviour
         settings.knockbackForce = 7f;
         settings.chainCount = 6;
         settings.chainSpacingWorld = 0.5f;
-        settings.chainDelaySeconds = 0.11f;
+        settings.chainDelaySeconds = 0.14f;
+        settings.useRollingChainPath = true;
+        settings.rollingChainMinSpeed = 3.2f;
+        settings.rollingChainAngularSpeed = 720f;
         settings.impactColor = new Color(1f, 0.85f, 0.05f, 0.55f);
     }
 

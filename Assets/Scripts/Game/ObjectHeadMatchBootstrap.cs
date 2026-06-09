@@ -17,6 +17,7 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
     [SerializeField] private int chunkSizePx = 64;
     [SerializeField] private int collisionCellSizePx = 4;
     [SerializeField, Range(1f, 2.5f)] private float mapWidthMultiplier = 1.5f;
+    [SerializeField, Range(12f, 20f)] private float upperSkyPaddingWorld = 16f;
     [SerializeField] private bool useFixedTestSpawnSeed;
     [FormerlySerializedAs("deterministicSpawnSeed")]
     [SerializeField] private int fixedTestSpawnSeed = 6974;
@@ -143,7 +144,8 @@ public class ObjectHeadMatchBootstrap : MonoBehaviour
             pixelsPerUnit,
             chunkSizePx,
             collisionCellSizePx,
-            mapWidthMultiplier);
+            mapWidthMultiplier,
+            upperSkyPaddingWorld);
 
         if (addTerrainEditBrush)
         {

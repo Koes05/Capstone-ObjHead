@@ -14,7 +14,7 @@ public class ObjectHeadCameraController : MonoBehaviour
     [SerializeField, Min(0.1f)] private float zoomSpeed = 7f;
     [SerializeField, Min(1f)] private float minSize = 4f;
     [SerializeField, Min(1f)] private float defaultPlaySize = 7.5f;
-    [SerializeField, Min(1f)] private float maxSize = 13f;
+    [SerializeField, Min(1f)] private float maxSize = 18f;
     [SerializeField] private Vector2 paddingWorld = new Vector2(0.4f, 0.4f);
 
     private Camera targetCamera;
@@ -169,7 +169,7 @@ public class ObjectHeadCameraController : MonoBehaviour
 
         if (overview)
         {
-            FitToTerrainOverview();
+            ToggleTerrainOverview();
             return;
         }
 
@@ -190,12 +190,26 @@ public class ObjectHeadCameraController : MonoBehaviour
 
         if (Mathf.Abs(zoomDelta) > 0f)
         {
+            overviewMode = false;
+            manualControl = true;
+            forceCharacterFocus = false;
             targetCamera.orthographicSize = Mathf.Clamp(
                 targetCamera.orthographicSize + zoomDelta * zoomSpeed * Time.unscaledDeltaTime,
                 minSize,
                 maxSize);
             transform.position = ClampToTerrain(transform.position);
         }
+    }
+
+    private void ToggleTerrainOverview()
+    {
+        if (overviewMode)
+        {
+            FocusOnCurrentTarget(true);
+            return;
+        }
+
+        FitToTerrainOverview();
     }
 
     private Transform FindFollowTarget()

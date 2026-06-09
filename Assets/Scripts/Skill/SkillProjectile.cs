@@ -116,6 +116,12 @@ public class SkillProjectile : MonoBehaviour
         Vector2 currentPosition = transform.position;
         if (terrain.TryCheckTerrainHit(previousPosition, currentPosition, out TerrainHit hit))
         {
+            if (UsesRollingChainPath())
+            {
+                previousPosition = currentPosition;
+                return;
+            }
+
             ResolveImpact(hit.point);
             return;
         }
@@ -234,9 +240,19 @@ public class SkillProjectile : MonoBehaviour
 
     private IEnumerator ResolveSkillEffectRoutine(Vector2 impactPoint)
     {
+        Vector2 fadePoint = impactPoint;
+
         if (skillSettings.effectType == SkillEffectType.ChainExplosion)
         {
-            yield return ApplyChainExplosionRoutine(impactPoint);
+            if (UsesRollingChainPath())
+            {
+                yield return ApplyRollingChainExplosionRoutine(impactPoint);
+                fadePoint = transform.position;
+            }
+            else
+            {
+                yield return ApplyChainExplosionRoutine(impactPoint);
+            }
         }
         else if (skillSettings.effectType == SkillEffectType.CreateTerrainCircle)
         {
@@ -247,7 +263,7 @@ public class SkillProjectile : MonoBehaviour
             ApplySkillEffect(impactPoint);
         }
 
-        StartCoroutine(ExplosionFadeRoutine(impactPoint));
+        StartCoroutine(ExplosionFadeRoutine(fadePoint));
     }
 
     private void ApplySkillEffect(Vector2 impactPoint)
@@ -298,10 +314,12 @@ public class SkillProjectile : MonoBehaviour
 
         for (int i = 0; i < count; i++)
         {
-            float centeredIndex = i - (count - 1) * 0.5f;
-            Vector2 point = impactPoint
-                + spreadDirection * (centeredIndex * skillSettings.chainSpacingWorld)
-                + perpendicular * (Mathf.Sin(i * 1.7f) * skillSettings.chainSpacingWorld * 0.5f);
+            Vector2 point = GetChainExplosionPoint(
+                impactPoint,
+                i,
+                count,
+                spreadDirection,
+                perpendicular);
 
             DestroyTerrainAtImpact(point);
             SpawnExplosionMarker(point);
@@ -312,6 +330,77 @@ public class SkillProjectile : MonoBehaviour
                 yield return new WaitForSeconds(delay);
             }
         }
+    }
+
+    private IEnumerator ApplyRollingChainExplosionRoutine(Vector2 impactPoint)
+    {
+        int count = Mathf.Max(1, skillSettings.chainCount);
+        float fallbackHorizontalSign = Mathf.Abs(lastVelocity.x) > 0.001f ? Mathf.Sign(lastVelocity.x) : 0f;
+        float delay = Mathf.Clamp(skillSettings.chainDelaySeconds, 0.08f, 0.2f);
+        Dictionary<CharacterCombat, int> accumulatedDamage = new Dictionary<CharacterCombat, int>();
+
+        ApplyRollingChainMotion();
+        for (int i = 0; i < count; i++)
+        {
+            Vector2 point = i == 0 ? impactPoint : (Vector2)transform.position;
+            DestroyTerrainAtImpact(point);
+            SpawnExplosionMarker(point);
+            ApplyCappedChainDamageAtPoint(point, fallbackHorizontalSign, accumulatedDamage);
+
+            if (i < count - 1)
+            {
+                ApplyRollingChainMotion();
+                yield return new WaitForSeconds(delay);
+            }
+        }
+    }
+
+    private Vector2 GetChainExplosionPoint(
+        Vector2 impactPoint,
+        int index,
+        int count,
+        Vector2 spreadDirection,
+        Vector2 perpendicular)
+    {
+        if (!skillSettings.useWideClusterPattern)
+        {
+            float centeredIndex = index - (count - 1) * 0.5f;
+            return impactPoint
+                + spreadDirection * (centeredIndex * skillSettings.chainSpacingWorld)
+                + perpendicular * (Mathf.Sin(index * 1.7f) * skillSettings.chainSpacingWorld * 0.5f);
+        }
+
+        Vector2[] clusterPattern =
+        {
+            Vector2.zero,
+            new Vector2(0f, -0.55f),
+            new Vector2(0f, 0.55f),
+            new Vector2(0.42f, -0.42f),
+            new Vector2(0.42f, 0.42f),
+            new Vector2(-0.42f, -0.42f),
+            new Vector2(-0.42f, 0.42f),
+            new Vector2(0.78f, 0f)
+        };
+
+        float spreadRadius = skillSettings.chainSpreadRadiusWorld > 0f
+            ? skillSettings.chainSpreadRadiusWorld
+            : Mathf.Max(0.35f, skillSettings.chainSpacingWorld * Mathf.Max(1, count - 1) * 0.5f);
+
+        Vector2 offset;
+        if (index < clusterPattern.Length)
+        {
+            offset = clusterPattern[index];
+        }
+        else
+        {
+            float angle = (index - clusterPattern.Length) * 2.399963f;
+            float radius = Mathf.Lerp(0.58f, 1f, (index % 5) / 4f);
+            offset = new Vector2(Mathf.Cos(angle) * radius, Mathf.Sin(angle) * radius);
+        }
+
+        return impactPoint
+            + spreadDirection * (offset.x * spreadRadius)
+            + perpendicular * (offset.y * spreadRadius);
     }
 
     private void ApplyCappedChainDamageAtPoint(
@@ -345,8 +434,11 @@ public class SkillProjectile : MonoBehaviour
 
             Vector2 characterCenter = combat.KnockbackCenter;
             Vector2 impactToCharacter = characterCenter - center;
-            float distanceRatio = Mathf.Clamp01(impactToCharacter.magnitude / skillSettings.explosionRadiusWorld);
-            float falloff = 1f - distanceRatio;
+            float falloff = DamageSystem.CalculateExplosionFalloff(
+                hits[i],
+                center,
+                characterCenter,
+                skillSettings.explosionRadiusWorld);
             int damage = Mathf.Min(remainingDamage, Mathf.CeilToInt(skillSettings.maxDamage * falloff));
             if (damage <= 0)
             {
@@ -482,6 +574,7 @@ public class SkillProjectile : MonoBehaviour
             skillSettings.finalTerrainRadiusYWorld > 0f
                 ? skillSettings.finalTerrainRadiusYWorld
                 : spreadX * 0.8f);
+        int maxAttemptsPerStamp = Mathf.Max(1, skillSettings.terrainBurstMaxPlacementAttemptsPerStamp);
         int seed = TerrainGrowthSeedUtility.Build(
             owner,
             turnManager,
@@ -490,41 +583,53 @@ public class SkillProjectile : MonoBehaviour
             impactPoint);
         System.Random random = new System.Random(seed);
         Bounds terrainBounds = terrainManager.GetTerrainBounds();
+        Collider2D[] blockedColliders = FindBlockedCharacterColliders();
         int clippedStamps = 0;
+        int buriedStamps = 0;
+        int placedStamps = 0;
         int stampsSinceRebuild = 0;
         float lastRebuildTime = Time.time;
 
         Debug.Log(
             $"Terrain burst seed={seed}, count={count}, stampRadiusPx={stampRadiusPx}, " +
-            $"spread=({spreadX:0.##}, {spreadY:0.##}).");
+            $"spread=({spreadX:0.##}, {spreadY:0.##}), maxAttempts={maxAttemptsPerStamp}.");
 
         for (int i = 0; i < count; i++)
         {
-            Vector2 normalizedOffset = GetBurstPatternOffset(i, count, random);
-            Vector2 point = impactPoint + new Vector2(
-                normalizedOffset.x * spreadX,
-                Mathf.Max(-0.12f, normalizedOffset.y) * spreadY +
-                Mathf.Max(0f, skillSettings.terrainBurstVerticalBiasWorld));
-            point.y = Mathf.Min(
-                point.y,
-                impactPoint.y + Mathf.Max(0.5f, skillSettings.maxBuildHeightAboveSurfaceWorld));
+            bool placed = false;
+            for (int attempt = 0; attempt < maxAttemptsPerStamp; attempt++)
+            {
+                Vector2 normalizedOffset = GetBurstPatternOffset(i, count, attempt, random);
+                Vector2 point = impactPoint + new Vector2(
+                    normalizedOffset.x * spreadX,
+                    normalizedOffset.y * spreadY + skillSettings.terrainBurstVerticalBiasWorld);
+                point.y = Mathf.Min(
+                    point.y,
+                    impactPoint.y + Mathf.Max(0.5f, skillSettings.maxBuildHeightAboveSurfaceWorld));
 
-            if (!terrainBounds.Contains(point))
-            {
-                clippedStamps++;
-            }
-            else
-            {
-                Collider2D[] blocked = FindBlockedCharacterColliders();
+                if (!terrainBounds.Contains(point))
+                {
+                    clippedStamps++;
+                    continue;
+                }
+
                 if (terrainManager.CreateCircleDeferred(
                     point,
                     stampRadiusPx,
                     TerrainType.Created,
-                    blocked))
+                    blockedColliders))
                 {
+                    placed = true;
+                    placedStamps++;
                     stampsSinceRebuild++;
                     SpawnGrowthMarker(point);
+                    break;
                 }
+            }
+
+            if (!placed)
+            {
+                buriedStamps++;
             }
 
             if (stampsSinceRebuild >= 2 || Time.time - lastRebuildTime >= 0.1f)
@@ -548,32 +653,41 @@ public class SkillProjectile : MonoBehaviour
                 $"({clippedStamps}/{count} stamps).");
         }
 
+        if (buriedStamps > 0)
+        {
+            Debug.Log(
+                $"Terrain burst placed {placedStamps}/{count} stamps; " +
+                $"{buriedStamps} stamps were fully buried or blocked after retries.");
+        }
+
         float fallbackHorizontalSign = Mathf.Abs(launchDirection.x) > 0.001f
             ? Mathf.Sign(launchDirection.x)
             : 0f;
         ApplyDamage(impactPoint, fallbackHorizontalSign);
     }
 
-    private static Vector2 GetBurstPatternOffset(int index, int count, System.Random random)
+    private static Vector2 GetBurstPatternOffset(int index, int count, int attempt, System.Random random)
     {
         Vector2[] foundation =
         {
             Vector2.zero,
-            new Vector2(-0.55f, 0.05f),
-            new Vector2(0.55f, 0.05f),
-            new Vector2(0f, 0.5f),
-            new Vector2(-0.42f, 0.48f),
-            new Vector2(0.42f, 0.48f),
-            new Vector2(-0.75f, 0.28f),
-            new Vector2(0.75f, 0.28f)
+            new Vector2(-0.55f, 0f),
+            new Vector2(0.55f, 0f),
+            new Vector2(0f, 0.55f),
+            new Vector2(0f, -0.55f),
+            new Vector2(-0.45f, 0.45f),
+            new Vector2(0.45f, 0.45f),
+            new Vector2(-0.45f, -0.45f),
+            new Vector2(0.45f, -0.45f)
         };
-        if (index < foundation.Length)
+
+        if (attempt == 0 && index < foundation.Length)
         {
             return foundation[index];
         }
 
-        float angle = (float)(random.NextDouble() * Mathf.PI);
-        float radius = Mathf.Lerp(0.15f, 0.88f, (float)random.NextDouble());
+        float angle = (float)(random.NextDouble() * Mathf.PI * 2.0);
+        float radius = Mathf.Lerp(0.15f, 0.92f, Mathf.Sqrt((float)random.NextDouble()));
         float x = Mathf.Cos(angle) * radius;
         float y = Mathf.Sin(angle) * radius;
         return new Vector2(x, y);
@@ -648,6 +762,53 @@ public class SkillProjectile : MonoBehaviour
     {
         float sign = Mathf.Abs(lastVelocity.x) > 0.001f ? Mathf.Sign(lastVelocity.x) : 1f;
         return new Vector2(sign, 0.15f).normalized;
+    }
+
+    private bool UsesRollingChainPath()
+    {
+        return skillSettings.effectType == SkillEffectType.ChainExplosion &&
+               skillSettings.useRollingChainPath;
+    }
+
+    private void ApplyRollingChainMotion()
+    {
+        if (body == null || !body.simulated)
+        {
+            return;
+        }
+
+        float sign = GetRollingDirectionSign();
+        float minSpeed = Mathf.Max(0f, skillSettings.rollingChainMinSpeed);
+        if (minSpeed > 0f)
+        {
+            Vector2 velocity = body.linearVelocity;
+            if (Mathf.Abs(velocity.x) < minSpeed)
+            {
+                velocity.x = sign * minSpeed;
+                body.linearVelocity = velocity;
+            }
+        }
+
+        float angularSpeed = Mathf.Max(0f, skillSettings.rollingChainAngularSpeed);
+        if (angularSpeed > 0f)
+        {
+            body.angularVelocity = -sign * angularSpeed;
+        }
+    }
+
+    private float GetRollingDirectionSign()
+    {
+        if (Mathf.Abs(lastVelocity.x) > 0.001f)
+        {
+            return Mathf.Sign(lastVelocity.x);
+        }
+
+        if (Mathf.Abs(launchDirection.x) > 0.001f)
+        {
+            return Mathf.Sign(launchDirection.x);
+        }
+
+        return 1f;
     }
 
     private void CompleteTurn()

@@ -22,11 +22,12 @@ public class AimController : MonoBehaviour
     [SerializeField, Min(0.01f)] private float targetingScale = 0.18f;
     [SerializeField, Min(0.01f)] private float chargingScale = 0.16f;
     [SerializeField] private float targetingSpriteAngleOffset;
-    [SerializeField] private float chargingSpriteAngleOffset = 90f;
+    [SerializeField] private float chargingSpriteAngleOffset = -90f;
     [SerializeField] private int visualSortingOrder = 25;
 
     private TurnCharacterController turnCharacter;
     private CharacterVisual characterVisual;
+    private TurnManager turnManager;
     private int facingSign = 1;
     private float chargePower;
     private Transform targetingRoot;
@@ -34,10 +35,12 @@ public class AimController : MonoBehaviour
     private SpriteRenderer targetingRenderer;
     private Transform chargingRoot;
     private Transform chargingImage;
-    private Transform chargingMaskTransform;
-    private SpriteRenderer chargingRenderer;
-    private SpriteMask chargingMask;
-    private static Sprite maskSprite;
+    private MeshFilter chargingMeshFilter;
+    private MeshRenderer chargingMeshRenderer;
+    private Mesh chargingMesh;
+    private Material chargingMaterial;
+    private Sprite lastChargingMeshSprite;
+    private float lastChargingMeshPower = -1f;
     private static Sprite fallbackTargetingSprite;
     private static Sprite fallbackChargingSprite;
 
@@ -65,6 +68,7 @@ public class AimController : MonoBehaviour
     {
         turnCharacter = GetComponent<TurnCharacterController>();
         characterVisual = GetComponent<CharacterVisual>();
+        turnManager = FindTurnManager();
         facingSign = startsFacingRight ? 1 : -1;
         if (characterVisual != null)
         {
@@ -83,24 +87,43 @@ public class AimController : MonoBehaviour
         {
             characterVisual.FacingChanged -= HandleFacingChanged;
         }
+
+        if (chargingMesh != null)
+        {
+            Destroy(chargingMesh);
+            chargingMesh = null;
+        }
+
+        if (chargingMaterial != null)
+        {
+            Destroy(chargingMaterial);
+            chargingMaterial = null;
+        }
     }
 
     private void Update()
     {
+        if (turnManager == null)
+        {
+            turnManager = FindTurnManager();
+        }
+
         SyncFacingFromVisual();
-        bool visible = turnCharacter != null && turnCharacter.HasControl;
-        if (visible)
+        bool canAim = turnCharacter != null &&
+            turnCharacter.HasControl &&
+            (turnManager == null || turnManager.CanCharacterFire(turnCharacter));
+        if (canAim)
         {
             ReadAimInput();
         }
 
-        UpdateVisuals(visible);
+        UpdateVisuals(canAim);
     }
 
     public void SetChargePower(float normalizedPower)
     {
         chargePower = Mathf.Clamp01(normalizedPower);
-        UpdateChargeMask();
+        UpdateChargingMesh();
     }
 
     public void ConfirmFacingFromAim()
@@ -185,18 +208,13 @@ public class AimController : MonoBehaviour
         chargingRoot.SetParent(transform, false);
         chargingImage = new GameObject("ChargingImage").transform;
         chargingImage.SetParent(chargingRoot, false);
-        chargingRenderer = chargingImage.gameObject.AddComponent<SpriteRenderer>();
-        chargingRenderer.sprite = chargingSprite;
-        chargingRenderer.sortingOrder = visualSortingOrder - 1;
-        chargingRenderer.maskInteraction = SpriteMaskInteraction.VisibleInsideMask;
-
-        chargingMaskTransform = new GameObject("ChargingMask").transform;
-        chargingMaskTransform.SetParent(chargingRoot, false);
-        chargingMask = chargingMaskTransform.gameObject.AddComponent<SpriteMask>();
-        chargingMask.sprite = GetMaskSprite();
-        chargingMask.isCustomRangeActive = true;
-        chargingMask.frontSortingOrder = visualSortingOrder;
-        chargingMask.backSortingOrder = visualSortingOrder - 2;
+        chargingMeshFilter = chargingImage.gameObject.AddComponent<MeshFilter>();
+        chargingMeshRenderer = chargingImage.gameObject.AddComponent<MeshRenderer>();
+        chargingMeshRenderer.sortingOrder = visualSortingOrder - 1;
+        chargingMesh = new Mesh { name = "ChargingFillMesh" };
+        chargingMesh.MarkDynamic();
+        chargingMeshFilter.sharedMesh = chargingMesh;
+        ConfigureChargingMaterial();
     }
 
     private void UpdateVisuals(bool visible)
@@ -229,31 +247,76 @@ public class AimController : MonoBehaviour
             0f,
             0f,
             directionAngle + chargingSpriteAngleOffset);
-        if (chargingRenderer != null)
+        if (chargingImage != null)
         {
-            chargingRenderer.sprite = chargingSprite;
-            chargingImage.localScale = Vector3.one * chargingScale;
-            chargingImage.localPosition = GetCenteredOffset(chargingSprite, chargingScale);
+            chargingImage.localScale = Vector3.one;
+            chargingImage.localPosition = Vector3.zero;
         }
 
-        UpdateChargeMask();
+        UpdateChargingMesh();
     }
 
-    private void UpdateChargeMask()
+    private void UpdateChargingMesh()
     {
-        if (chargingSprite == null || chargingMaskTransform == null)
+        if (chargingSprite == null || chargingMesh == null || chargingMeshRenderer == null)
         {
             return;
         }
 
-        Bounds bounds = chargingSprite.bounds;
-        float width = Mathf.Max(0.05f, bounds.size.x * chargingScale * 1.05f);
-        float height = Mathf.Max(0.05f, bounds.size.y * chargingScale);
-        float fillHeight = Mathf.Max(0.01f, height * Mathf.Clamp01(chargePower));
-        float bottom = -height * 0.5f;
-        chargingMaskTransform.localPosition = new Vector3(0f, bottom + fillHeight * 0.5f, 0f);
-        chargingMaskTransform.localRotation = Quaternion.identity;
-        chargingMaskTransform.localScale = new Vector3(width, fillHeight, 1f);
+        float fill = Mathf.Clamp01(chargePower);
+        if (fill <= 0.001f)
+        {
+            chargingMesh.Clear();
+            lastChargingMeshPower = fill;
+            lastChargingMeshSprite = chargingSprite;
+            return;
+        }
+
+        if (Mathf.Approximately(fill, lastChargingMeshPower) &&
+            lastChargingMeshSprite == chargingSprite)
+        {
+            return;
+        }
+
+        ConfigureChargingMaterial();
+
+        Rect textureRect = chargingSprite.textureRect;
+        float pixelsPerUnit = Mathf.Max(1f, chargingSprite.pixelsPerUnit);
+        float fullWidth = textureRect.width / pixelsPerUnit * chargingScale;
+        float fullHeight = textureRect.height / pixelsPerUnit * chargingScale;
+        float fillHeight = fullHeight * fill;
+        float left = fullWidth * -0.5f;
+        float right = fullWidth * 0.5f;
+        float bottom = fullHeight * -0.5f;
+        float top = bottom + fillHeight;
+
+        Texture2D texture = chargingSprite.texture;
+        float uMin = textureRect.xMin / texture.width;
+        float uMax = textureRect.xMax / texture.width;
+        float vMin = textureRect.yMin / texture.height;
+        float vMax = textureRect.yMax / texture.height;
+        float vFill = Mathf.Lerp(vMin, vMax, fill);
+
+        chargingMesh.Clear();
+        chargingMesh.vertices = new[]
+        {
+            new Vector3(left, bottom, 0f),
+            new Vector3(right, bottom, 0f),
+            new Vector3(left, top, 0f),
+            new Vector3(right, top, 0f)
+        };
+        chargingMesh.uv = new[]
+        {
+            new Vector2(uMin, vMin),
+            new Vector2(uMax, vMin),
+            new Vector2(uMin, vFill),
+            new Vector2(uMax, vFill)
+        };
+        chargingMesh.triangles = new[] { 0, 2, 1, 2, 3, 1 };
+        chargingMesh.RecalculateBounds();
+
+        lastChargingMeshPower = fill;
+        lastChargingMeshSprite = chargingSprite;
     }
 
     private static Vector3 GetCenteredOffset(Sprite sprite, float scale)
@@ -261,24 +324,43 @@ public class AimController : MonoBehaviour
         return sprite != null ? -sprite.bounds.center * scale : Vector3.zero;
     }
 
-    private static Sprite GetMaskSprite()
+    private void ConfigureChargingMaterial()
     {
-        if (maskSprite != null)
+        if (chargingMeshRenderer == null || chargingSprite == null)
         {
-            return maskSprite;
+            return;
         }
 
-        Texture2D texture = new Texture2D(1, 1, TextureFormat.RGBA32, false);
-        texture.SetPixel(0, 0, Color.white);
-        texture.Apply();
-        texture.hideFlags = HideFlags.HideAndDontSave;
-        maskSprite = Sprite.Create(
-            texture,
-            new Rect(0f, 0f, 1f, 1f),
-            new Vector2(0.5f, 0.5f),
-            1f);
-        maskSprite.hideFlags = HideFlags.HideAndDontSave;
-        return maskSprite;
+        if (chargingMaterial == null)
+        {
+            Shader spriteShader = Shader.Find("Sprites/Default");
+            if (spriteShader == null)
+            {
+                spriteShader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
+            }
+
+            if (spriteShader == null)
+            {
+                spriteShader = Shader.Find("Unlit/Transparent");
+            }
+
+            chargingMaterial = new Material(spriteShader)
+            {
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            chargingMeshRenderer.sharedMaterial = chargingMaterial;
+        }
+
+        chargingMaterial.mainTexture = chargingSprite.texture;
+    }
+
+    private static TurnManager FindTurnManager()
+    {
+#if UNITY_6000_0_OR_NEWER || UNITY_2023_1_OR_NEWER
+        return Object.FindAnyObjectByType<TurnManager>();
+#else
+        return Object.FindObjectOfType<TurnManager>();
+#endif
     }
 
     private void LoadDefaultSprites()

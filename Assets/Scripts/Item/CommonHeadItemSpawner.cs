@@ -140,7 +140,8 @@ public class CommonHeadItemSpawner : MonoBehaviour
                 continue;
             }
 
-            CommonHeadItem.Create(type, spawnPosition, GetSprite(type));
+            CommonHeadItem spawnedItem = CommonHeadItem.Create(type, spawnPosition, GetSprite(type));
+            spawnedItem.RefreshIgnoredCharacterCollisions();
             Debug.Log(
                 $"Spawned {type} common head at {spawnPosition}. " +
                 $"{CommonHeadItem.GetActiveCount(type)}/{targetCountPerType} for this type, " +
@@ -222,9 +223,9 @@ public class CommonHeadItemSpawner : MonoBehaviour
 
     private void LoadFallbackSprites()
     {
-        if (attackSprite == null) attackSprite = Resources.Load<Sprite>("Sprites/Heads/head_bomb_red");
-        if (mobilitySprite == null) mobilitySprite = Resources.Load<Sprite>("Sprites/Heads/head_bulb_on");
-        if (terrainCreationSprite == null) terrainCreationSprite = Resources.Load<Sprite>("Sprites/Heads/head_seed");
+        if (attackSprite == null) attackSprite = Resources.Load<Sprite>("Sprites/Heads/common_head_attack_bomb");
+        if (mobilitySprite == null) mobilitySprite = Resources.Load<Sprite>("Sprites/Heads/common_head_mobility_wing");
+        if (terrainCreationSprite == null) terrainCreationSprite = Resources.Load<Sprite>("Sprites/Heads/common_head_terrain_cloud");
     }
 
     private static T FindAny<T>() where T : Object

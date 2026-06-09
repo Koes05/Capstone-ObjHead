@@ -18,6 +18,7 @@ public class TerrainManager : MonoBehaviour
     [SerializeField] private Vector2 terrainOriginWorld = Vector2.zero;
     [SerializeField] private int pixelsPerUnit = 32;
     [SerializeField, Range(1f, 2.5f)] private float horizontalExpansion = 1f;
+    [SerializeField, Range(0f, 24f)] private float upperSkyPaddingWorld = 16f;
 
     [Header("Collision")]
     [SerializeField] private int chunkSizePx = 64;
@@ -57,6 +58,8 @@ public class TerrainManager : MonoBehaviour
         : visualSourceTexture != null ? visualSourceTexture.height : 0;
     public int PixelsPerUnit => Mathf.Max(1, pixelsPerUnit);
     public float HorizontalExpansion => Mathf.Max(1f, horizontalExpansion);
+    public float UpperSkyPaddingWorld => Mathf.Max(0f, upperSkyPaddingWorld);
+    public int UpperSkyPaddingPx => Mathf.Max(0, Mathf.RoundToInt(UpperSkyPaddingWorld * PixelsPerUnit));
     public Vector2 TerrainOriginWorld => terrainOriginWorld;
     public bool IsInitialized => initialized;
     public Texture2D RuntimeVisualTexture => runtimeVisualTexture;
@@ -182,6 +185,31 @@ public class TerrainManager : MonoBehaviour
         int collisionCellSize,
         float horizontalScale)
     {
+        Configure(
+            terrainVisualTexture,
+            terrainCollisionMask,
+            renderer,
+            terrainChunkRoot,
+            originWorld,
+            ppu,
+            chunkSize,
+            collisionCellSize,
+            horizontalScale,
+            upperSkyPaddingWorld);
+    }
+
+    public void Configure(
+        Texture2D terrainVisualTexture,
+        Texture2D terrainCollisionMask,
+        SpriteRenderer renderer,
+        Transform terrainChunkRoot,
+        Vector2 originWorld,
+        int ppu,
+        int chunkSize,
+        int collisionCellSize,
+        float horizontalScale,
+        float upperPaddingWorld)
+    {
         visualSourceTexture = terrainVisualTexture;
         collisionMaskTexture = terrainCollisionMask;
         terrainRenderer = renderer;
@@ -191,6 +219,7 @@ public class TerrainManager : MonoBehaviour
         chunkSizePx = Mathf.Max(1, chunkSize);
         collisionCellSizePx = NormalizeCollisionCellSize(collisionCellSize);
         horizontalExpansion = Mathf.Clamp(horizontalScale, 1f, 2.5f);
+        upperSkyPaddingWorld = Mathf.Max(0f, upperPaddingWorld);
         InitializeTerrain();
     }
 
@@ -215,16 +244,19 @@ public class TerrainManager : MonoBehaviour
             terrainRenderer = GetComponent<SpriteRenderer>();
         }
 
-        runtimeVisualTexture = CreateHorizontallyExpandedRuntimeTexture(
+        int topPaddingPx = UpperSkyPaddingPx;
+        runtimeVisualTexture = CreateExpandedRuntimeTexture(
             visualSourceTexture,
-            HorizontalExpansion);
+            HorizontalExpansion,
+            topPaddingPx);
         runtimeVisualTexture.name = visualSourceTexture.name + "_RuntimeVisual";
         runtimeVisualTexture.filterMode = FilterMode.Point;
         runtimeVisualTexture.wrapMode = TextureWrapMode.Clamp;
 
-        runtimeCollisionTexture = CreateHorizontallyExpandedRuntimeTexture(
+        runtimeCollisionTexture = CreateExpandedRuntimeTexture(
             maskSource != null ? maskSource : visualSourceTexture,
-            HorizontalExpansion);
+            HorizontalExpansion,
+            topPaddingPx);
         runtimeCollisionTexture.name = (maskSource != null ? maskSource.name : visualSourceTexture.name) + "_RuntimeCollision";
         runtimeCollisionTexture.filterMode = FilterMode.Point;
         runtimeCollisionTexture.wrapMode = TextureWrapMode.Clamp;
@@ -833,20 +865,22 @@ public class TerrainManager : MonoBehaviour
         return copy;
     }
 
-    private static Texture2D CreateHorizontallyExpandedRuntimeTexture(
+    private static Texture2D CreateExpandedRuntimeTexture(
         Texture2D texture,
-        float horizontalScale)
+        float horizontalScale,
+        int topPaddingPx)
     {
         Texture2D readable = CreateReadableRuntimeTexture(texture);
         int targetWidth = Mathf.Max(1, Mathf.RoundToInt(readable.width * Mathf.Max(1f, horizontalScale)));
-        if (targetWidth == readable.width)
+        int targetHeight = readable.height + Mathf.Max(0, topPaddingPx);
+        if (targetWidth == readable.width && targetHeight == readable.height)
         {
             return readable;
         }
 
-        Texture2D expanded = new Texture2D(targetWidth, readable.height, TextureFormat.RGBA32, false);
+        Texture2D expanded = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
         Color32[] sourcePixels = readable.GetPixels32();
-        Color32[] expandedPixels = new Color32[targetWidth * readable.height];
+        Color32[] expandedPixels = new Color32[targetWidth * targetHeight];
 
         for (int y = 0; y < readable.height; y++)
         {
@@ -1125,6 +1159,7 @@ public class TerrainManager : MonoBehaviour
     {
         pixelsPerUnit = Mathf.Max(1, pixelsPerUnit);
         horizontalExpansion = Mathf.Clamp(horizontalExpansion, 1f, 2.5f);
+        upperSkyPaddingWorld = Mathf.Max(0f, upperSkyPaddingWorld);
         chunkSizePx = Mathf.Max(1, chunkSizePx);
         collisionCellSizePx = NormalizeCollisionCellSize(collisionCellSizePx);
         collisionSolidRatioThreshold = Mathf.Clamp01(collisionSolidRatioThreshold);

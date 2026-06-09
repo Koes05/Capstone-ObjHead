@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
@@ -21,6 +22,8 @@ public class TurnManager : MonoBehaviour
     [SerializeField, Min(0)] private int startingIndex;
     [SerializeField] private bool allowManualTurnEnd = true;
     [SerializeField, Min(5f)] private float turnDurationSeconds = 30f;
+    [SerializeField, Min(0.1f)] private float residualMovementSeconds = 5f;
+    [SerializeField, Min(0f)] private float damageSettlementSeconds = 1f;
 
     private int currentTurnIndex = -1;
     private bool isMatchOver;
@@ -32,6 +35,12 @@ public class TurnManager : MonoBehaviour
     private bool actionUsedThisTurn;
     private bool turnEndRequested;
     private bool victoryCheckPending;
+    private bool residualTimeActive;
+    private bool applyingResidualDamage;
+    private bool settlementTimeActive;
+    private float remainingResidualSeconds;
+    private float remainingSettlementSeconds;
+    private Coroutine damageSettlementRoutine;
 
     public event Action<TurnCharacterController> TurnStarted;
     public event Action<TurnCharacterController> TurnEnded;
@@ -52,6 +61,14 @@ public class TurnManager : MonoBehaviour
     public float TurnDurationSeconds => turnDurationSeconds;
     public float RemainingTurnSeconds => remainingTurnSeconds;
     public float TurnTime01 => turnDurationSeconds > 0f ? Mathf.Clamp01(remainingTurnSeconds / turnDurationSeconds) : 0f;
+    public float ResidualMovementSeconds => residualMovementSeconds;
+    public float RemainingResidualSeconds => remainingResidualSeconds;
+    public float ResidualTime01 => residualMovementSeconds > 0f ? Mathf.Clamp01(remainingResidualSeconds / residualMovementSeconds) : 0f;
+    public bool IsResidualTimeActive => residualTimeActive;
+    public float DamageSettlementSeconds => damageSettlementSeconds;
+    public float RemainingSettlementSeconds => remainingSettlementSeconds;
+    public float SettlementTime01 => damageSettlementSeconds > 0f ? Mathf.Clamp01(remainingSettlementSeconds / damageSettlementSeconds) : 0f;
+    public bool IsSettlementTimeActive => settlementTimeActive;
     public bool IsActionPending =>
         CurrentPhase == TurnPhase.ProjectileFlying ||
         CurrentPhase == TurnPhase.PostImpactDelay ||
@@ -119,9 +136,14 @@ public class TurnManager : MonoBehaviour
 
     public bool CanCharacterMove(TurnCharacterController character)
     {
-        if (character == null || character != CurrentCharacter || isMatchOver)
+        if (character == null || character != CurrentCharacter || isMatchOver || settlementTimeActive)
         {
             return false;
+        }
+
+        if (residualTimeActive)
+        {
+            return true;
         }
 
         return CurrentPhase == TurnPhase.Aiming ||
@@ -135,6 +157,7 @@ public class TurnManager : MonoBehaviour
                character == CurrentCharacter &&
                !isMatchOver &&
                !actionUsedThisTurn &&
+               !residualTimeActive &&
                CurrentPhase == TurnPhase.Aiming;
     }
 
@@ -146,6 +169,7 @@ public class TurnManager : MonoBehaviour
         }
 
         actionUsedThisTurn = true;
+        StartResidualTime("Action used.");
         SetPhase(TurnPhase.ProjectileFlying);
         return true;
     }
@@ -183,9 +207,20 @@ public class TurnManager : MonoBehaviour
             return;
         }
 
+        if (settlementTimeActive)
+        {
+            return;
+        }
+
         SetPhase(TurnPhase.WaitingManualEnd);
         CharacterCombat combat = CurrentCharacter.GetComponent<CharacterCombat>();
-        if (turnEndRequested || remainingTurnSeconds <= 0f || (combat != null && combat.IsDead))
+        if (turnEndRequested || (combat != null && combat.IsDead))
+        {
+            AdvanceTurn();
+            return;
+        }
+
+        if (!residualTimeActive && remainingTurnSeconds <= 0f)
         {
             AdvanceTurn();
         }
@@ -200,6 +235,12 @@ public class TurnManager : MonoBehaviour
     {
         if (isMatchOver || CurrentCharacter == null)
         {
+            return;
+        }
+
+        if (residualTimeActive || settlementTimeActive)
+        {
+            turnEndRequested = true;
             return;
         }
 
@@ -245,6 +286,16 @@ public class TurnManager : MonoBehaviour
             return;
         }
 
+        if (applyingResidualDamage)
+        {
+            victoryCheckPending = true;
+            if (CurrentCharacter != null && combat.gameObject == CurrentCharacter.gameObject)
+            {
+                turnEndRequested = true;
+            }
+            return;
+        }
+
         if (IsActionPending)
         {
             victoryCheckPending = true;
@@ -273,6 +324,22 @@ public class TurnManager : MonoBehaviour
             return;
         }
 
+        if (settlementTimeActive)
+        {
+            return;
+        }
+
+        if (residualTimeActive)
+        {
+            TickResidualTimer();
+            return;
+        }
+
+        if (CurrentPhase != TurnPhase.Aiming)
+        {
+            return;
+        }
+
         remainingTurnSeconds = Mathf.Max(0f, remainingTurnSeconds - Time.deltaTime);
         if (remainingTurnSeconds > 0f)
         {
@@ -286,7 +353,135 @@ public class TurnManager : MonoBehaviour
         }
 
         Debug.Log("Turn timer expired.");
+        StartResidualTime("Turn timer expired.");
+    }
+
+    private void TickResidualTimer()
+    {
+        remainingResidualSeconds = Mathf.Max(0f, remainingResidualSeconds - Time.deltaTime);
+        if (remainingResidualSeconds > 0f)
+        {
+            return;
+        }
+
+        residualTimeActive = false;
+        remainingResidualSeconds = 0f;
+        Debug.Log("Residual movement timer expired.");
+        bool appliedPendingDamage = FlushPendingResidualDamage();
+
+        if (isMatchOver || CurrentCharacter == null)
+        {
+            return;
+        }
+
+        if (appliedPendingDamage && damageSettlementSeconds > 0f)
+        {
+            BeginDamageSettlementTime();
+            return;
+        }
+
+        CompletePostResidualTransition();
+    }
+
+    private void CompletePostResidualTransition()
+    {
+        if (isMatchOver || CurrentCharacter == null)
+        {
+            return;
+        }
+
+        if (victoryCheckPending && TryResolveVictory())
+        {
+            return;
+        }
+
+        if (IsActionPending)
+        {
+            turnEndRequested = true;
+            ApplyCharacterControlState();
+            return;
+        }
+
+        CharacterCombat currentCombat = CurrentCharacter.GetComponent<CharacterCombat>();
+        if (turnEndRequested || (currentCombat != null && currentCombat.IsDead))
+        {
+            AdvanceTurn();
+            return;
+        }
+
         AdvanceTurn();
+    }
+
+    private void StartResidualTime(string reason)
+    {
+        if (residualTimeActive || settlementTimeActive || isMatchOver || CurrentCharacter == null)
+        {
+            return;
+        }
+
+        remainingTurnSeconds = 0f;
+        remainingResidualSeconds = residualMovementSeconds;
+        residualTimeActive = true;
+        Debug.Log($"{reason} Residual movement time started: {residualMovementSeconds:0.#}s.");
+        ApplyCharacterControlState();
+    }
+
+    private bool FlushPendingResidualDamage()
+    {
+        if (characters == null)
+        {
+            return false;
+        }
+
+        bool appliedAnyDamage = false;
+        applyingResidualDamage = true;
+        try
+        {
+            for (int i = 0; i < characters.Length; i++)
+            {
+                CharacterCombat combat = characters[i] != null
+                    ? characters[i].GetComponent<CharacterCombat>()
+                    : null;
+                if (combat != null && combat.ApplyPendingDamage() > 0)
+                {
+                    appliedAnyDamage = true;
+                }
+            }
+        }
+        finally
+        {
+            applyingResidualDamage = false;
+        }
+
+        return appliedAnyDamage;
+    }
+
+    private void BeginDamageSettlementTime()
+    {
+        if (damageSettlementRoutine != null)
+        {
+            StopCoroutine(damageSettlementRoutine);
+        }
+
+        settlementTimeActive = true;
+        remainingSettlementSeconds = damageSettlementSeconds;
+        ApplyCharacterControlState();
+        damageSettlementRoutine = StartCoroutine(DamageSettlementRoutine());
+    }
+
+    private IEnumerator DamageSettlementRoutine()
+    {
+        remainingSettlementSeconds = Mathf.Max(0f, damageSettlementSeconds);
+        while (remainingSettlementSeconds > 0f)
+        {
+            remainingSettlementSeconds = Mathf.Max(0f, remainingSettlementSeconds - Time.deltaTime);
+            yield return null;
+        }
+
+        settlementTimeActive = false;
+        remainingSettlementSeconds = 0f;
+        damageSettlementRoutine = null;
+        CompletePostResidualTransition();
     }
 
     private void AdvanceTurn()
@@ -366,7 +561,10 @@ public class TurnManager : MonoBehaviour
         actionUsedThisTurn = false;
         turnEndRequested = false;
         victoryCheckPending = false;
+        residualTimeActive = false;
+        StopDamageSettlementRoutine();
         remainingTurnSeconds = turnDurationSeconds;
+        remainingResidualSeconds = 0f;
         SetPhase(TurnPhase.Aiming);
 
         if (announceRound)
@@ -390,6 +588,12 @@ public class TurnManager : MonoBehaviour
     private void SetPhase(TurnPhase phase)
     {
         CurrentPhase = phase;
+        ApplyCharacterControlState();
+        TurnPhaseChanged?.Invoke(CurrentPhase);
+    }
+
+    private void ApplyCharacterControlState()
+    {
         if (characters != null)
         {
             for (int i = 0; i < characters.Length; i++)
@@ -408,8 +612,6 @@ public class TurnManager : MonoBehaviour
                 }
             }
         }
-
-        TurnPhaseChanged?.Invoke(CurrentPhase);
     }
 
     private bool TryResolveVictory()
@@ -472,6 +674,9 @@ public class TurnManager : MonoBehaviour
         CurrentCharacter = null;
         currentTurnIndex = -1;
         remainingTurnSeconds = 0f;
+        remainingResidualSeconds = 0f;
+        residualTimeActive = false;
+        StopDamageSettlementRoutine();
         if (characters == null)
         {
             return;
@@ -559,6 +764,18 @@ public class TurnManager : MonoBehaviour
                 combat.Died -= NotifyCharacterDied;
             }
         }
+    }
+
+    private void StopDamageSettlementRoutine()
+    {
+        if (damageSettlementRoutine != null)
+        {
+            StopCoroutine(damageSettlementRoutine);
+            damageSettlementRoutine = null;
+        }
+
+        settlementTimeActive = false;
+        remainingSettlementSeconds = 0f;
     }
 
     private int CompareByTeamThenSlotThenX(TurnCharacterController left, TurnCharacterController right)
